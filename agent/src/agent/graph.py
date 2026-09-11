@@ -34,6 +34,7 @@ class IncidentState(TypedDict):
     approval: str
     verification: dict | None
     verify_attempts: int
+    investigation_tool_results: int
     report: str | None
 
 
