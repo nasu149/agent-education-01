@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>名簿管理アプリ</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 16px;background:#f6f7f9;color:#17202a}
+    .card{background:white;border:1px solid #dde2e7;border-radius:12px;padding:20px;margin-bottom:18px}
+    table{border-collapse:collapse;width:100%}th,td{padding:10px;border-bottom:1px solid #e6e9ec;text-align:left}
+    input{padding:8px;margin:4px;border:1px solid #bbc3cc;border-radius:6px}button{padding:8px 12px;border:0;border-radius:6px;cursor:pointer}
+    .ok{color:#0a7a32}.ng{color:#b42318}
+  </style>
+</head>
+<body>
+  <h1>名簿管理アプリ</h1>
+  <p>研修用: Browser → httpd → Tomcat(Servlet) → PostgreSQL</p>
+
+  <div class="card">
+    <h2>登録</h2>
+    <input id="name" placeholder="氏名">
+    <input id="department" placeholder="部署">
+    <input id="email" placeholder="email">
+    <button onclick="createMember()">登録</button>
+    <span id="message"></span>
+  </div>
+
+  <div class="card">
+    <h2>名簿</h2>
+    <button onclick="loadMembers()">再読込</button>
+    <table><thead><tr><th>ID</th><th>氏名</th><th>部署</th><th>Email</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+
+<script>
+async function loadMembers(){
+  const msg=document.getElementById('message');
+  try{
+    const r=await fetch('/api/members');
+    const body=await r.json();
+    if(!r.ok) throw new Error(JSON.stringify(body));
+    document.getElementById('rows').innerHTML=body.map(m=>`<tr><td>${m.id}</td><td>${m.name}</td><td>${m.department}</td><td>${m.email}</td><td><button onclick="removeMember(${m.id})">削除</button></td></tr>`).join('');
+    msg.textContent='正常'; msg.className='ok';
+  }catch(e){msg.textContent='エラー: '+e;msg.className='ng';}
+}
+async function createMember(){
+  const payload={name:name.value,department:department.value,email:email.value};
+  const r=await fetch('/api/members',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(r.ok){await loadMembers();}else{document.getElementById('message').textContent=await r.text();}
+}
+async function removeMember(id){
+  await fetch('/api/members/'+id,{method:'DELETE'});
+  await loadMembers();
+}
+loadMembers();
+</script>
+</body>
+</html>
