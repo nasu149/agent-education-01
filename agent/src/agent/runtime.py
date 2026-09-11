@@ -130,6 +130,7 @@ class AgentRuntime:
                 "approval": "not_required",
                 "verification": None,
                 "verify_attempts": 0,
+                "investigation_tool_results": 0,
                 "report": None,
             }
             try:
