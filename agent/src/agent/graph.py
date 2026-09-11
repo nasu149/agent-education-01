@@ -36,6 +36,7 @@ class IncidentState(TypedDict):
     approval: Literal["not_required", "pending", "approved", "rejected"]
     verification: dict | None
     verify_attempts: int
+    investigation_tool_results: int
     report: str | None
 
 
@@ -76,12 +77,13 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def investigate(state: IncidentState) -> dict:
         """Let the LLM choose the next read-only observation or finish investigation."""
-        tool_results_seen = sum(isinstance(message, ToolMessage) for message in state["messages"])
+        tool_results_seen = state["investigation_tool_results"]
         messages = [SystemMessage(content=INVESTIGATION_SYSTEM_PROMPT), *state["messages"]]
 
-        # Bound exploration: once enough observations exist, remove tools and force
-        # the model to summarize what it already knows instead of looping forever.
+        # Bound each investigation round. The counter is reset by `judge`, so a
+        # failed remediation may return here and still obtain fresh observations.
         if tool_results_seen >= settings.max_investigation_tool_results:
+            emit_event("WARN", "Investigation observation budget reached; forcing a conclusion")
             messages.append(
                 HumanMessage(
                     content=(
@@ -105,11 +107,18 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
     async def tools(state: IncidentState) -> dict:
         """Execute the LLM's selected read-only tools through LangGraph ToolNode."""
         result = await raw_tool_node.ainvoke(state)
-        for message in result.get("messages", []):
-            if isinstance(message, ToolMessage):
-                preview = str(message.content).replace("\n", " ")[:450]
-                emit_event("INFO", f"Observation from {message.name}: {preview}")
-        return result
+        tool_messages = [
+            message
+            for message in result.get("messages", [])
+            if isinstance(message, ToolMessage)
+        ]
+        for message in tool_messages:
+            preview = str(message.content).replace("\n", " ")[:450]
+            emit_event("INFO", f"Observation from {message.name}: {preview}")
+        return {
+            **result,
+            "investigation_tool_results": state["investigation_tool_results"] + len(tool_messages),
+        }
 
     async def judge(state: IncidentState) -> dict:
         """Convert free-form observations into a strict, inspectable decision."""
@@ -138,7 +147,11 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
                 f"confidence={diagnosis.confidence}"
             ),
         )
-        return {"diagnosis": diagnosis}
+        return {
+            "diagnosis": diagnosis,
+            # A future verify failure begins a fresh investigation round.
+            "investigation_tool_results": 0,
+        }
 
     def after_judge(state: IncidentState) -> Literal["approval", "report"]:
         diagnosis = state["diagnosis"]
@@ -311,10 +324,34 @@ def _route_after_investigate(state: IncidentState) -> Literal["tools", "judge"]:
 
 
 def _status_code(tool_result) -> int | None:
-    """Extract status code from MCP/LangChain tool output shapes."""
+    """Extract an HTTP status from MCP/LangChain content or structured artifacts."""
+    if isinstance(tool_result, ToolMessage):
+        if tool_result.artifact:
+            status = _status_code(tool_result.artifact)
+            if status is not None:
+                return status
+        return _status_code(tool_result.content)
+
     if isinstance(tool_result, dict):
         value = tool_result.get("status_code")
-        return int(value) if value is not None else None
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+        for key in ("structured_content", "content", "text"):
+            if key in tool_result:
+                status = _status_code(tool_result[key])
+                if status is not None:
+                    return status
+        return None
+
+    if isinstance(tool_result, (list, tuple)):
+        for item in tool_result:
+            status = _status_code(item)
+            if status is not None:
+                return status
+        return None
 
     if isinstance(tool_result, str):
         try:
@@ -322,6 +359,6 @@ def _status_code(tool_result) -> int | None:
         except json.JSONDecodeError:
             match = __import__("re").search(r"status_code['\"]?\s*[:=]\s*(\d+)", tool_result)
             return int(match.group(1)) if match else None
-        if isinstance(parsed, dict) and parsed.get("status_code") is not None:
-            return int(parsed["status_code"])
+        return _status_code(parsed)
+
     return None
