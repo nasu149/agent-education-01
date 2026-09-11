@@ -15,11 +15,11 @@ from urllib.parse import urljoin
 import docker
 import httpx
 from docker.errors import DockerException, NotFound
-from mcp.server import MCPServer
+from mcp.server.fastmcp import FastMCP
 
 LOGGER = logging.getLogger("mcp.operations")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-mcp = MCPServer("operations-training-server", log_level=os.getenv("LOG_LEVEL", "INFO"))
+mcp = FastMCP("operations-training-server", log_level=os.getenv("LOG_LEVEL", "INFO"))
 
 PROJECT = os.getenv("TARGET_COMPOSE_PROJECT", "agent-education")
 ALLOWED_SERVICES = {
@@ -39,10 +39,12 @@ CONFIG_TARGETS = {
 
 
 def _client():
+    """Create a Docker SDK client through the mounted local Docker socket."""
     return docker.from_env()
 
 
 def _container_for_service(service: str):
+    """Resolve one allow-listed Compose service to its current container."""
     if service not in ALLOWED_SERVICES:
         raise ValueError(f"service must be one of {sorted(ALLOWED_SERVICES)}")
 
@@ -184,11 +186,7 @@ def read_config(config_name: str) -> dict[str, Any]:
 
 @mcp.tool()
 def start_container(service: str) -> dict[str, str]:
-    """Start one allowed service.
-
-    This tool mutates system state. The LangGraph LLM never receives it directly;
-    only the post-approval remediation node may invoke it.
-    """
+    """Start one allowed service after the Graph has obtained human approval."""
     LOGGER.warning("MUTATION start_container service=%s", service)
     container = _container_for_service(service)
     container.start()
@@ -207,4 +205,4 @@ def restart_container(service: str) -> dict[str, str]:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio")
