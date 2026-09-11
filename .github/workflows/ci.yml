@@ -56,6 +56,13 @@ jobs:
             if [ "$code" -ne 0 ]; then
               echo "===== docker compose ps ====="
               docker compose ps || true
+              echo "===== PostgreSQL direct check ====="
+              docker compose exec -T postgres psql -U memberapp -d memberdb -c 'select id,name,email from members order by id;' || true
+              echo "===== HTTP response ====="
+              curl -sS -i http://localhost:8088/api/members || true
+              echo
+              echo "===== Tomcat database failures ====="
+              docker compose logs --no-color tomcat 2>&1 | grep -A12 -B4 -E 'Database failure|SQLException|PSQLException|ERROR|Exception' || true
               echo "===== docker compose logs ====="
               docker compose logs --no-color || true
             fi
@@ -66,10 +73,17 @@ jobs:
 
           echo "Waiting for Browser -> httpd -> Tomcat -> PostgreSQL path..."
           ready=0
-          for _ in $(seq 1 60); do
-            if curl -fsS http://localhost:8088/api/members > /tmp/members.json; then
+          for _ in $(seq 1 30); do
+            status=$(curl -sS -o /tmp/members.json -w '%{http_code}' http://localhost:8088/api/members || true)
+            if [ "$status" = "200" ]; then
               ready=1
               break
+            fi
+            echo "Current HTTP status: $status"
+            if [ -s /tmp/members.json ]; then
+              echo "Response body:"
+              cat /tmp/members.json
+              echo
             fi
             sleep 2
           done
