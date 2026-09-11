@@ -1,62 +1,26 @@
-# AI Agent研修 - 講師準備 / ハンズオン開始版 (`instructor-ready`)
+# AI Agent研修 - 完成版 (`student-complete`)
 
-このブランチは **午後ハンズオン開始時に受講者へ配布する状態** です。
+昨日までに作った Web システムを「運用する側」から見直し、障害一次対応を Agent 化する新人研修の完成形です。
 
-httpd / Tomcat / PostgreSQL、名簿管理Servlet、MCP Server、Tool、Gemini接続用依存、Health Checker、Agent Dashboard、障害注入script、debug log まで講師側で完成しています。
+このブランチは、午後のハンズオンで新人が最終的に到達するコードです。
 
-受講者が主に編集するのは次の1ファイルです。
+## この教材で教えること
 
-```text
-agent/src/agent/graph.py
-```
+主役は LangGraph の API ではありません。
 
-最初のGraphは安全なplaceholderです。環境全体は正常に起動し、障害を検知できますが、Agent調査は「ここから実装する」と表示して終了します。
+受講者には次の設計判断を体験してもらいます。
 
-完成形は `student-complete` branch にあります。
+- HTTP 200/500 の判定のような決定論的処理は普通のプログラムに任せる
+- 障害後の「次に何を見るか」は LLM に任せる
+- LLM は read-only Tool だけを自由に選択する
+- 状態変更は Graph の決められた経路からしか実行できない
+- `interrupt()` で人間承認を必須にする
+- 復旧後に再観測し、直っていなければ再調査する
+- MCP は Agent の知能ではなく Tool 接続の標準化レイヤーである
 
-## 研修の設計思想
+最終的に理解してほしい Agent 像は **Observe → Decide → Act → Re-observe** です。
 
-午前講義で先に次を理解させてからコードへ入ってください。
-
-```text
-昨日まで:
-Browser -> httpd -> Tomcat -> Servlet -> PostgreSQL を作った
-
-今日:
-そのシステムを「運用する側」になる
-```
-
-最初の問いは LangGraph ではありません。
-
-> 名簿アプリが使えない、と言われたら人間は何を見ますか？
-
-受講者の答えを整理して、
-
-```text
-Observe
-  ↓
-Decide
-  ↓
-Act
-  ↓
-Re-observe
-```
-
-へつなげます。
-
-その後で、
-
-- HTTP status 判定は普通のコードで十分
-- 「次にログを見るか、containerを見るか」は状況依存
-- そこを LLM に任せる
-- 外界を見る能力が Tool
-- Tool接続の標準化が MCP
-- 全体の仕事の順序・権限制御が LangGraph
-- 危険操作前の境界が Human-in-the-loop
-
-という順番にしてください。
-
-## システム
+## システム構成
 
 ```text
 Browser
@@ -65,240 +29,244 @@ Browser
 httpd :8088
   |
   v
-Tomcat 10 + Java Servlet
+Tomcat 10 / Java Servlet
   |
   v
 PostgreSQL 17
 
-
-Health Checker (ordinary Python)
+ordinary health checker
   |
-  | abnormal
+  | failure
   v
-LangGraph starter
-  |
-  v
-investigate_placeholder
+LangGraph
   |
   v
-END
-```
-
-受講者が午後にこれを、
-
-```text
-START
-  |
-  v
-investigate <---- tools(ToolNode)
-  |                 |
-  +-----------------+
+investigate <---- ToolNode(read-only MCP tools)
   |
   v
 judge
   |
-  +--> report (manual / no action)
-  |
-  v
-approval
-  |
-  v
-remediate
-  |
-  v
-verify -- failure --> investigate
-  |
-  v
-report
-  |
- END
+  +---- manual / none --------------------+
+  |                                       |
+  v                                       |
+approval (LangGraph interrupt)             |
+  |                                       |
+approve                                   |
+  v                                       |
+remediate (mutation MCP tool)              |
+  |                                       |
+  v                                       |
+verify ---- NG ---> investigate            |
+  |                                       |
+  +------------- OK -----------------------+
+                                          |
+                                          v
+                                        report
 ```
 
-へ育てます。
+詳細は [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) を参照してください。
 
 ## 必要なもの
 
 - Docker Desktop / Docker Engine
 - Docker Compose v2
-- Gemini Developer API key
+- Gemini Developer API の API key
 - ブラウザ
 
-ホストに Python / Java / Maven は不要です。
+ホスト側に Java / Maven / Python は不要です。すべて Docker build 内で準備します。
 
-## 講師の事前準備
+> Windows 11 + Docker Desktop の Linux Containers を主な想定にしています。Agent コンテナは Docker socket を read/write mount するため、研修専用PC・研修専用環境で使ってください。
 
-### 1. `.env`
+## 起動
 
 PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
+# .env の GEMINI_API_KEY を編集
+docker compose up -d --build
+docker compose logs -f agent
 ```
 
 bash:
 
 ```bash
 cp .env.example .env
+# .env の GEMINI_API_KEY を編集
+docker compose up -d --build
+docker compose logs -f agent
 ```
 
-`.env` の次だけ設定します。
-
-```dotenv
-GEMINI_API_KEY=...
-```
-
-### 2. 事前build
-
-研修前に必ず各PCで一度実施してください。
-
-```bash
-docker compose build
-```
-
-研修中に Maven / PyPI / Docker Hub の大量downloadが発生するのを避けるためです。
-
-### 3. 起動確認
-
-```bash
-docker compose up -d
-docker compose ps
-```
+起動後:
 
 - 名簿アプリ: http://localhost:8088
 - Agent dashboard: http://localhost:8090
+- Agent status API: http://localhost:8090/api/status
 
-名簿が3件表示され、Agent側が `HEALTHY / HTTP 200` ならOKです。
+初回は Maven / Python package / Docker image の取得があるため、講師は研修前に全端末で一度 `docker compose build` してください。
 
-### 4. MCPの確認
+## 正常状態
 
-Agent container 内からMCP Serverはstdioで起動されます。
+名簿アプリに3件の初期データが表示され、Agent dashboard に `HEALTHY / HTTP 200` が表示されれば準備完了です。
 
-MCPの実装:
+Agent は5秒ごとに普通の `httpx` コードで確認します。正常時に Gemini は呼びません。
 
-```text
-agent/src/mcp_server/server.py
-```
+ここが研修上重要です。
 
-提供済みread-only Tool:
+**「AIを使えるから使う」のではなく、曖昧な判断が必要な場所だけ AI を使います。**
 
-- `http_request`
-- `list_containers`
-- `inspect_container`
-- `get_container_logs`
-- `read_config`
+## MCP Tool
 
-変更系Tool:
+LLMに公開する read-only Tool:
 
-- `start_container`
-- `restart_container`
+| Tool | 役割 |
+|---|---|
+| `http_request` | Webアプリを外側から観測 |
+| `list_containers` | httpd / Tomcat / PostgreSQL の状態一覧 |
+| `inspect_container` | 1コンテナの状態・port・network・一部env確認 |
+| `get_container_logs` | 直近ログ確認 |
+| `read_config` | 許可済み設定だけ確認 |
 
-**変更系Toolは存在しますが、LLMへ直接渡すためのものではありません。**
+LLMには公開しない mutation Tool:
 
-完成版ではHuman Approval後のNodeだけが呼びます。
+| Tool | 役割 |
+|---|---|
+| `start_container` | 停止コンテナを起動 |
+| `restart_container` | コンテナ再起動 |
 
-## 午後ハンズオン
+mutation Tool は `approval` を通過した `remediate` node だけが呼べます。
 
-詳細手順は [`docs/HANDS_ON.md`](docs/HANDS_ON.md) を参照してください。
+`exec_shell`、`read_any_file`、`fix_system` のような万能 Tool はあえて提供していません。
 
-推奨は約3.5〜4時間です。
+## Graph
 
-### Step 0 - まず動かす
+主要Nodeは次の7つです。
 
-受講者はコードを書く前に、
+1. `investigate`
+   - Gemini が次に必要な観測を判断
+   - read-only Tool のみ選択可能
+2. `tools`
+   - LangGraph `ToolNode`
+   - MCP Tool を実行して結果を State の `messages` に返す
+3. `judge`
+   - 調査結果を `Diagnosis` に構造化
+4. `approval`
+   - `interrupt()` で状態変更前に停止
+5. `remediate`
+   - 承認済み mutation Tool だけ実行
+6. `verify`
+   - HTTP を再観測
+7. `report`
+   - 一次対応結果をまとめる
 
-```bash
-docker compose up -d --build
-```
+`tools -> investigate` と `verify -> investigate` の2種類のループがあります。
 
-で、
+前者は **情報を得た結果、次の調査を変える Agent loop**。後者は **行動後に環境を再観測する loop** です。
 
-- 名簿アプリ
-- Agent dashboard
-- `docker compose logs -f agent`
+## State
 
-を確認します。
+`IncidentState` は「Agentの脳内」よりも **インシデント対応の共有作業票** と説明してください。
 
-ここで講師が一度 `tomcat-stop` を入れても構いません。
+主な項目:
 
-starterは障害を検知しますが、調査せず安全に終了します。
+- `messages`: LLM / Tool の観測履歴
+- `incident`: 最初に検知した事象
+- `diagnosis`: 構造化された原因判断
+- `approval`: 人間承認状態
+- `verification`: 復旧後確認
+- `verify_attempts`: 再調査回数
+- `report`: 最終報告
 
-> 「監視はできた。でも原因を調べる判断能力がまだない」
+## デバッグログ
 
-という状態を見せられます。
-
-### Step 1 - investigation loop
-
-受講者が、
-
-- Gemini
-- read-only Tool bind
-- `investigate`
-- `ToolNode`
-- conditional edge
-- `tools -> investigate`
-
-を追加します。
-
-ここが最重要です。
-
-```text
-観測結果
-   ↓
-次に見るものを変える
-   ↓
-また観測
-```
-
-というAgent loopを体験させます。
-
-### Step 2 - judge
-
-調査中の自由度をそのまま全Graphへ流さず、`Diagnosis` に変換します。
-
-「LLMを使う場所」と「システムで固定する場所」を分けます。
-
-### Step 3 - HITL / remediation
-
-`interrupt()` を入れ、
-
-```text
-原因推定
- -> 復旧案
- -> Human Approval
- -> mutation Tool
-```
-
-にします。
-
-### Step 4 - verify
-
-状態を変えたら終わりではなく、HTTPを再観測します。
-
-失敗なら `investigate` へ戻します。
-
-### Step 5 - Secret fault
-
-最後は講師が障害を隠して注入します。
-
-詳しい答えは [`docs/INSTRUCTOR_GUIDE.md`](docs/INSTRUCTOR_GUIDE.md) にあります。
-
-## Debug
+リアルタイム:
 
 ```bash
 docker compose logs -f agent
 ```
 
-さらに、
+ホストにも保存されます:
 
 ```text
 logs/agent.log
 ```
 
-へrotating logを保存します。
+Dashboard の `Agent activity` には、内部思考全文ではなく以下だけを表示します。
 
-Dashboardにも教育上必要なtraceだけ表示されます。
+- 選択した Tool
+- Tool の観測結果
+- 構造化された原因判断
+- HITL
+- 実行した復旧操作
+- Verification
 
-## Reset
+## 講師が障害を注入する
+
+PowerShell:
+
+```powershell
+.\scripts\inject_fault.ps1 tomcat-stop
+.\scripts\inject_fault.ps1 postgres-stop
+.\scripts\inject_fault.ps1 proxy-port
+.\scripts\inject_fault.ps1 db-password
+```
+
+bash:
+
+```bash
+./scripts/inject_fault.sh tomcat-stop
+./scripts/inject_fault.sh postgres-stop
+./scripts/inject_fault.sh proxy-port
+./scripts/inject_fault.sh db-password
+```
+
+### Level 1: `tomcat-stop`
+
+期待例:
+
+```text
+HTTP failure
+-> list_containers
+-> tomcat exited
+-> httpd log / additional evidence
+-> start_container(tomcat) proposed
+-> Human Approval
+-> start
+-> HTTP 200
+```
+
+### Level 2: `postgres-stop`
+
+期待例:
+
+```text
+HTTP 500
+-> containers
+-> postgres exited
+-> Tomcat log
+-> PostgreSQL connection failure
+-> start_container(postgres)
+-> Approval
+-> verify
+```
+
+### Level 3: `proxy-port`
+
+httpd の backend を `tomcat:8080` から `tomcat:18080` に変更します。
+
+全部 running なので、状態一覧だけでは答えが出ません。ログ・設定・container情報を組み合わせる必要があります。
+
+Agent に設定変更 Tool はありません。したがって「原因特定 + 人間へエスカレーション」で成功です。
+
+### Level 3: `db-password`
+
+PostgreSQL 側の user password だけ変更します。Tomcat / PostgreSQL は running のままです。
+
+これも Agent の権限では安全に修復できないため、manual escalation が期待結果です。
+
+## リセット
+
+一番確実な方法:
 
 PowerShell:
 
@@ -312,13 +280,118 @@ bash:
 ./scripts/reset.sh
 ```
 
-DB volumeも削除し、完全な初期状態へ戻します。
+DB volume を含めて作り直すため、次のチーム演習を完全な正常状態から始められます。
 
-## ブランチの使い分け
+## 午前講義 → 午後ハンズオンのシナリオ
 
-| Branch | 用途 |
-|---|---|
-| `instructor-ready` | 午後開始時。インフラ完成、Graphは演習用starter |
-| `student-complete` | 完成見本・講師の答え・トラブル時の比較用 |
+午前中はコードを書かせません。
 
-新人に最初から `student-complete` のコードを見せない方が、設計を考える時間を作れます。
+講義では次の順番を推奨します。
+
+1. 昨日作った httpd / Tomcat / PostgreSQL 構成を振り返る
+2. 「名簿アプリが使えない。人間なら何を見る？」を考える
+3. 人間の調査を Observe → Decide → Act → Re-observe に整理
+4. 普通のLLMには環境を見る目・手がないことを説明
+5. Tool を与える意味を説明
+6. Tool があるだけでは権限・終了条件・再確認が決まらないと説明
+7. State / Node / Edge / conditional edge / ToolNode を紹介
+8. 「固定する仕事の流れ」と「LLMに任せる局所判断」を分離
+9. HITL を「本番で勝手に再起動してよいか？」から導入
+10. MCP は最後に、Tool 接続の標準化として位置付ける
+
+午後は `instructor-ready` branch から始め、完成結果としてこの branch と同じ Graph を作ります。
+
+## 午後の推奨進行
+
+### 13:00-13:20: 環境確認
+
+- `docker compose up`
+- 名簿アプリを見る
+- Agent dashboardを見る
+- MCP Tool一覧を確認
+- 「監視にLLMを使っていない」ことを確認
+
+### 13:20-14:10: investigation loop
+
+受講者が主に編集するのは `agent/src/agent/graph.py` です。
+
+- Gemini に read-only tools を bind
+- `investigate`
+- `ToolNode`
+- conditional edge
+- `tools -> investigate`
+
+既知障害 `tomcat-stop` で練習します。
+
+### 14:10-14:40: 判断をGraphへ戻す
+
+- `Diagnosis`
+- `judge`
+- 「自由な調査」と「明示的な次工程」を分ける
+
+### 14:40-15:20: HITL と remediation
+
+- `interrupt()`
+- `Command(resume=...)`
+- mutation Tool を LLM に直接渡さない理由
+- `remediate`
+
+### 15:20-15:40: verify
+
+- 行動したら再観測
+- 直っていなければ再調査
+
+### 15:40-16:20: Secret fault challenge
+
+講師だけが障害を知る状態で1チーム1障害を注入します。
+
+### 16:20-16:50: 発表
+
+各チームは以下を説明します。
+
+- 原因
+- Toolを使った順番
+- 観測結果で次の行動がどう変わったか
+- LLMに任せた部分
+- Graphで固定した部分
+- HITLの意味
+- Agentに追加権限を与えるべきか
+
+### 16:50-17:00: まとめ
+
+```text
+決められる処理        -> ordinary code
+状況依存の局所判断    -> LLM
+外界の観測/操作       -> Tool
+Tool接続の標準化      -> MCP
+危険操作の境界        -> Human
+仕事全体の制御        -> LangGraph
+```
+
+## ソースの見どころ
+
+- `agent/src/agent/runtime.py`: 普通の監視とAgent起動の境界
+- `agent/src/agent/graph.py`: 教育の主役
+- `agent/src/agent/mcp_tools.py`: read-only / mutation capability 分離
+- `agent/src/mcp_server/server.py`: MCP Tool実装
+- `agent/src/agent/api.py`: HITL UI/API
+- `scripts/`: 講師用障害注入
+
+完成版の意図は [`docs/SOLUTION_GUIDE.md`](docs/SOLUTION_GUIDE.md) にもまとめています。
+
+## CI
+
+GitHub Actionsで以下を確認します。
+
+- Python compile + unit test
+- Maven build
+- `docker compose config`
+- `docker compose build`
+
+Geminiを呼ぶE2EテストはAPI keyが必要なのでCIには入れていません。
+
+## セキュリティ上の注意
+
+Agent コンテナには Docker socket を mount しています。これは研修環境では簡潔ですが、実運用で同じ方式を無批判に採用しないでください。
+
+この教材の「安全性」は Tool の allow-list と Graph の権限制御を学ぶためのものです。本番ではさらに認証、認可、監査、secret管理、永続checkpoint、Tool側のポリシーなどが必要です。
