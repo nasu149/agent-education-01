@@ -1,0 +1,64 @@
+name: ${COMPOSE_PROJECT_NAME:-agent-education}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: memberdb
+      POSTGRES_USER: memberapp
+      POSTGRES_PASSWORD: memberapp
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memberapp -d memberdb"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  tomcat:
+    build:
+      context: ./member-app
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: memberdb
+      DB_USER: memberapp
+      DB_PASSWORD: memberapp
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  httpd:
+    build:
+      context: ./httpd
+    ports:
+      - "8088:80"
+    depends_on:
+      - tomcat
+
+  agent:
+    build:
+      context: ./agent
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      APP_BASE_URL: http://httpd
+      TARGET_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-agent-education}
+      TARGET_SERVICES: httpd,tomcat,postgres
+      HEALTH_CHECK_INTERVAL_SECONDS: ${HEALTH_CHECK_INTERVAL_SECONDS:-5}
+      MONITOR_STARTUP_GRACE_SECONDS: ${MONITOR_STARTUP_GRACE_SECONDS:-20}
+      FAILURE_THRESHOLD: ${FAILURE_THRESHOLD:-2}
+      MAX_INVESTIGATION_TOOL_RESULTS: ${MAX_INVESTIGATION_TOOL_RESULTS:-6}
+      VERIFY_RETRY_LIMIT: ${VERIFY_RETRY_LIMIT:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./logs:/app/logs
+    depends_on:
+      - httpd
+
+volumes:
+  postgres-data:
