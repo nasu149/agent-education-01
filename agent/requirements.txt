@@ -1,0 +1,11 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+docker==7.1.0
+pydantic==2.11.7
+langchain==1.4.0
+langgraph==1.2.11
+langchain-google-genai==4.4.0
+langchain-mcp-adapters==0.3.2
+mcp==2.2.0
+pytest==8.4.2
