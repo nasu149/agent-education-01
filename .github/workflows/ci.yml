@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: ["instructor-ready", "student-complete"]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r agent/requirements.txt
+      - run: python -m compileall -q agent/src
+      - run: pytest -q agent/tests
+
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - run: mvn -B -q -f member-app/pom.xml package -DskipTests
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose config >/dev/null
+      - run: docker compose build
