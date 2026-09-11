@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import sys
 from dataclasses import dataclass
 
@@ -27,19 +29,42 @@ class ToolCatalog:
     mutating: dict[str, BaseTool]
 
 
+def _mcp_subprocess_environment() -> tuple[str, dict[str, str]]:
+    """Return a stable working directory and environment for the stdio server.
+
+    `MultiServerMCPClient` launches the MCP server in a child process. Relying on
+    a relative ``PYTHONPATH`` makes startup depend on the caller's current
+    directory, which is fragile in CI and IDEs. Derive the absolute ``src`` path
+    from this module so the subprocess can always import ``mcp_server``.
+    """
+
+    src_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(src_root)
+        if not existing_pythonpath
+        else os.pathsep.join((str(src_root), existing_pythonpath))
+    )
+    return str(src_root), env
+
+
 async def load_tool_catalog() -> ToolCatalog:
     """Load tools from the local MCP server over stdio.
 
-    The LLM only receives `read_only`. Mutation tools remain available to the
+    The LLM only receives ``read_only``. Mutation tools remain available to the
     deterministic remediation node, which is reachable only after approval.
     """
 
+    cwd, env = _mcp_subprocess_environment()
     client = MultiServerMCPClient(
         {
             "operations": {
                 "transport": "stdio",
                 "command": sys.executable,
                 "args": ["-m", "mcp_server.server"],
+                "cwd": cwd,
+                "env": env,
             }
         }
     )
