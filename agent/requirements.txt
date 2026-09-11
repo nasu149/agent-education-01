@@ -7,5 +7,5 @@ langchain==1.4.0
 langgraph==1.2.11
 langchain-google-genai==4.4.0
 langchain-mcp-adapters==0.3.2
-mcp==2.2.0
+mcp==1.30.0
 pytest==8.4.2
