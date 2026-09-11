@@ -8,6 +8,8 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: agent/src
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
