@@ -13,12 +13,12 @@ services:
       POSTGRES_DB: memberdb
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      # Training-only: avoids embedding role passwords in init.sql.
-      # Do not copy this authentication mode to a real environment.
-      POSTGRES_HOST_AUTH_METHOD: trust
+      APP_DB_PASSWORD: memberapp
+      FAULT_DB_PASSWORD: fault_injector
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./postgres/02-set-role-passwords.sh:/docker-entrypoint-initdb.d/02-set-role-passwords.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d memberdb"]
       interval: 3s
@@ -90,7 +90,7 @@ services:
       DB_PORT: "5432"
       DB_NAME: memberdb
       DB_USER: fault_injector
-      DB_PASSWORD: unused-in-training-trust-mode
+      DB_PASSWORD: fault_injector
       DB_APPLICATION_NAME: fault-injector
       FAULT_MAX_CONNECTIONS: "100"
     depends_on:
