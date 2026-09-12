@@ -8,4 +8,5 @@ langgraph==1.2.11
 langchain-google-genai==4.4.0
 langchain-mcp-adapters==0.3.2
 mcp==1.30.0
+psycopg[binary]>=3.2,<4
 pytest==8.4.2
