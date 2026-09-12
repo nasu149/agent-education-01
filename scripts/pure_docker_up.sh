@@ -45,7 +45,8 @@ docker run -d \
   -e POSTGRES_DB=memberdb \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_HOST_AUTH_METHOD=trust \
+  -e APP_DB_PASSWORD=memberapp \
+  -e FAULT_DB_PASSWORD=fault_injector \
   -v "$VOLUME:/var/lib/postgresql/data" \
   agent-education-postgres \
   postgres -c max_connections=20 -c superuser_reserved_connections=3 \
