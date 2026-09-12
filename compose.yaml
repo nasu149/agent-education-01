@@ -3,15 +3,24 @@ name: ${COMPOSE_PROJECT_NAME:-agent-education}
 services:
   postgres:
     image: postgres:17-alpine
+    command:
+      - postgres
+      - -c
+      - max_connections=20
+      - -c
+      - superuser_reserved_connections=3
     environment:
       POSTGRES_DB: memberdb
-      POSTGRES_USER: memberapp
-      POSTGRES_PASSWORD: memberapp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # Training-only: avoids embedding role passwords in init.sql.
+      # Do not copy this authentication mode to a real environment.
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U memberapp -d memberdb"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memberdb"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -46,10 +55,20 @@ services:
       APP_BASE_URL: http://httpd
       TARGET_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-agent-education}
       TARGET_SERVICES: httpd,tomcat,postgres
+      TARGET_HTTPD_CONTAINER: agent-education-httpd
+      TARGET_TOMCAT_CONTAINER: agent-education-tomcat
+      TARGET_POSTGRES_CONTAINER: agent-education-postgres
+      DB_ADMIN_HOST: postgres
+      DB_ADMIN_PORT: "5432"
+      DB_ADMIN_NAME: memberdb
+      DB_ADMIN_USER: postgres
+      DB_ADMIN_PASSWORD: postgres
+      TERMINABLE_DB_APPLICATIONS: fault-injector
+      FAULT_DB_USER: fault_injector
       HEALTH_CHECK_INTERVAL_SECONDS: ${HEALTH_CHECK_INTERVAL_SECONDS:-5}
       MONITOR_STARTUP_GRACE_SECONDS: ${MONITOR_STARTUP_GRACE_SECONDS:-20}
       FAILURE_THRESHOLD: ${FAILURE_THRESHOLD:-2}
-      MAX_INVESTIGATION_TOOL_RESULTS: ${MAX_INVESTIGATION_TOOL_RESULTS:-6}
+      MAX_INVESTIGATION_TOOL_RESULTS: ${MAX_INVESTIGATION_TOOL_RESULTS:-8}
       VERIFY_RETRY_LIMIT: ${VERIFY_RETRY_LIMIT:-1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -59,6 +78,24 @@ services:
       - ./logs:/app/logs
     depends_on:
       - httpd
+
+  # Not started during normal operation. Start this profile only when the
+  # instructor wants to inject the PostgreSQL connection-exhaustion incident.
+  fault-injector:
+    build:
+      context: ./fault-injector
+    profiles: ["fault"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: memberdb
+      DB_USER: fault_injector
+      DB_PASSWORD: unused-in-training-trust-mode
+      DB_APPLICATION_NAME: fault-injector
+      FAULT_MAX_CONNECTIONS: "100"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres-data:
