@@ -57,7 +57,7 @@ jobs:
               echo "===== docker compose ps ====="
               docker compose ps || true
               echo "===== PostgreSQL direct check ====="
-              docker compose exec -T postgres psql -U memberapp -d memberdb -c 'select id,name,email from members order by id;' || true
+              docker compose exec -T postgres psql -U postgres -d memberdb -c 'select id,name,email from members order by id;' || true
               echo "===== HTTP response ====="
               curl -sS -i http://localhost:8088/api/members || true
               echo
@@ -116,5 +116,78 @@ jobs:
               break
             fi
             sleep 2
+          done
+          test "$recovered" -eq 1
+
+  connection-exhaustion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - name: Start normal application stack
+        run: docker compose up -d --build postgres tomcat httpd
+      - name: Verify connection-exhaustion incident can be injected and recovered
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            code=$?
+            trap - EXIT
+            if [ "$code" -ne 0 ]; then
+              echo "===== compose ps ====="
+              docker compose --profile fault ps || true
+              echo "===== fault injector logs ====="
+              docker compose --profile fault logs --no-color fault-injector || true
+              echo "===== postgres logs ====="
+              docker compose logs --no-color postgres || true
+              echo "===== tomcat logs ====="
+              docker compose logs --no-color tomcat || true
+            fi
+            docker compose --profile fault down -v --remove-orphans || true
+            exit "$code"
+          }
+          trap cleanup EXIT
+
+          echo "Waiting for healthy application..."
+          healthy=0
+          for _ in $(seq 1 40); do
+            if curl -fsS http://localhost:8088/api/members >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          test "$healthy" -eq 1
+
+          echo "Starting non-superuser connection hog..."
+          docker compose --profile fault up -d --build fault-injector
+
+          failed=0
+          for _ in $(seq 1 40); do
+            if ! curl -fsS http://localhost:8088/api/members >/dev/null 2>&1; then
+              failed=1
+              break
+            fi
+            sleep 1
+          done
+          test "$failed" -eq 1
+
+          connection_count=$(docker compose exec -T postgres \
+            psql -U postgres -d memberdb -Atc \
+            "select count(*) from pg_stat_activity where usename='fault_injector' and application_name='fault-injector';")
+          echo "fault-injector sessions: $connection_count"
+          test "$connection_count" -ge 10
+
+          echo "Stopping injector should release sessions and recover the application..."
+          docker compose --profile fault stop fault-injector
+
+          recovered=0
+          for _ in $(seq 1 40); do
+            if curl -fsS http://localhost:8088/api/members >/dev/null 2>&1; then
+              recovered=1
+              break
+            fi
+            sleep 1
           done
           test "$recovered" -eq 1
