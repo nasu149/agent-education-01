@@ -2,7 +2,7 @@
 
 The tools are low-level enough that the LLM must investigate, but constrained
 enough to be safe and understandable in a classroom. The server never exposes a
-generic shell or arbitrary file-read capability.
+generic shell, arbitrary file-read capability, or arbitrary SQL execution.
 """
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ from urllib.parse import urljoin
 
 import docker
 import httpx
+import psycopg
 from docker.errors import DockerException, NotFound
 from mcp.server.fastmcp import FastMCP
+from psycopg.rows import dict_row
 
 LOGGER = logging.getLogger("mcp.operations")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -29,12 +31,30 @@ ALLOWED_SERVICES = {
 }
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://httpd").rstrip("/")
 
+CONTAINER_NAMES = {
+    "httpd": os.getenv("TARGET_HTTPD_CONTAINER", "agent-education-httpd"),
+    "tomcat": os.getenv("TARGET_TOMCAT_CONTAINER", "agent-education-tomcat"),
+    "postgres": os.getenv("TARGET_POSTGRES_CONTAINER", "agent-education-postgres"),
+}
+
 CONFIG_TARGETS = {
     "httpd_proxy": ("httpd", "/usr/local/apache2/conf/extra/member-app.conf"),
     "tomcat_database": (
         "tomcat",
         "__ENV__:DB_HOST,DB_PORT,DB_NAME,DB_USER",
     ),
+}
+
+DB_ADMIN_HOST = os.getenv("DB_ADMIN_HOST", "postgres")
+DB_ADMIN_PORT = int(os.getenv("DB_ADMIN_PORT", "5432"))
+DB_ADMIN_NAME = os.getenv("DB_ADMIN_NAME", "memberdb")
+DB_ADMIN_USER = os.getenv("DB_ADMIN_USER", "postgres")
+DB_ADMIN_PASSWORD = os.getenv("DB_ADMIN_PASSWORD", "postgres")
+FAULT_DB_USER = os.getenv("FAULT_DB_USER", "fault_injector")
+TERMINABLE_DB_APPLICATIONS = {
+    item.strip()
+    for item in os.getenv("TERMINABLE_DB_APPLICATIONS", "fault-injector").split(",")
+    if item.strip()
 }
 
 
@@ -44,7 +64,12 @@ def _client():
 
 
 def _container_for_service(service: str):
-    """Resolve one allow-listed Compose service to its current container."""
+    """Resolve one allow-listed service for Compose or plain ``docker run``.
+
+    Compose containers are discovered by labels. For the real training flow,
+    where trainees use plain Docker commands, the MCP server falls back to an
+    explicitly configured container name.
+    """
     if service not in ALLOWED_SERVICES:
         raise ValueError(f"service must be one of {sorted(ALLOWED_SERVICES)}")
 
@@ -57,9 +82,41 @@ def _container_for_service(service: str):
             ]
         },
     )
-    if not containers:
-        raise NotFound(f"container for service '{service}' was not found")
-    return containers[0]
+    if containers:
+        return containers[0]
+
+    configured_name = CONTAINER_NAMES.get(service)
+    if configured_name:
+        try:
+            return _client().containers.get(configured_name)
+        except NotFound:
+            pass
+
+    raise NotFound(
+        f"container for service '{service}' was not found by Compose labels "
+        f"or configured name {configured_name!r}"
+    )
+
+
+def _postgres_connection():
+    """Open the private management connection used only by fixed MCP operations.
+
+    The demo intentionally uses the PostgreSQL superuser here so this connection
+    can use PostgreSQL's superuser-reserved slots after normal application slots
+    are exhausted. The LLM never receives these credentials and never receives
+    an arbitrary SQL tool.
+    """
+    return psycopg.connect(
+        host=DB_ADMIN_HOST,
+        port=DB_ADMIN_PORT,
+        dbname=DB_ADMIN_NAME,
+        user=DB_ADMIN_USER,
+        password=DB_ADMIN_PASSWORD,
+        application_name="incident-agent-mcp",
+        connect_timeout=3,
+        autocommit=True,
+        row_factory=dict_row,
+    )
 
 
 @mcp.tool()
@@ -162,6 +219,7 @@ def read_config(config_name: str) -> dict[str, Any]:
     LOGGER.info("read_config config=%s service=%s", config_name, service)
 
     if target.startswith("__ENV__:"):
+        container.reload()
         keys = set(target.removeprefix("__ENV__:").split(","))
         env = {}
         for item in container.attrs.get("Config", {}).get("Env", []):
@@ -185,6 +243,59 @@ def read_config(config_name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def get_postgres_connection_summary() -> dict[str, Any]:
+    """Run fixed read-only SELECTs that summarize PostgreSQL connection usage.
+
+    This is intentionally *not* an arbitrary SQL tool. The SQL text is defined
+    in the MCP implementation and cannot be supplied by the model. It returns
+    max_connections, superuser-reserved slots, and pg_stat_activity grouped by
+    database user, application_name, client address and state.
+    """
+    LOGGER.info("get_postgres_connection_summary")
+    with _postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    current_setting('max_connections')::int AS max_connections,
+                    current_setting('superuser_reserved_connections')::int
+                        AS superuser_reserved_connections
+                """
+            )
+            limits = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(datname, '') AS database,
+                    COALESCE(usename, '') AS username,
+                    COALESCE(application_name, '') AS application_name,
+                    COALESCE(client_addr::text, 'local') AS client_addr,
+                    COALESCE(state, '') AS state,
+                    COUNT(*)::int AS connections
+                FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                GROUP BY datname, usename, application_name, client_addr, state
+                ORDER BY connections DESC, username, application_name, state
+                """
+            )
+            activity = [dict(row) for row in cur.fetchall()]
+
+    max_connections = int(limits.get("max_connections", 0))
+    superuser_reserved = int(limits.get("superuser_reserved_connections", 0))
+    observed_connections = sum(int(row["connections"]) for row in activity)
+    ordinary_capacity = max(0, max_connections - superuser_reserved)
+
+    return {
+        "max_connections": max_connections,
+        "superuser_reserved_connections": superuser_reserved,
+        "ordinary_connection_capacity": ordinary_capacity,
+        "observed_connections_excluding_this_mcp_session": observed_connections,
+        "activity": activity,
+    }
+
+
+@mcp.tool()
 def start_container(service: str) -> dict[str, str]:
     """Start one allowed service after the Graph has obtained human approval."""
     LOGGER.warning("MUTATION start_container service=%s", service)
@@ -202,6 +313,63 @@ def restart_container(service: str) -> dict[str, str]:
     container.restart(timeout=10)
     container.reload()
     return {"service": service, "status": container.status, "action": "restart"}
+
+
+@mcp.tool()
+def terminate_postgres_connections(application_name: str) -> dict[str, Any]:
+    """Terminate only explicitly allow-listed PostgreSQL client sessions.
+
+    This mutation is intended for the Human-in-the-loop remediation node. The
+    caller may choose only an application_name from TERMINABLE_DB_APPLICATIONS;
+    the SQL itself is fixed and parameterized. The training default allows only
+    `fault-injector`, and the query additionally requires the dedicated
+    `fault_injector` database role.
+    """
+    if application_name not in TERMINABLE_DB_APPLICATIONS:
+        raise ValueError(
+            f"application_name must be one of {sorted(TERMINABLE_DB_APPLICATIONS)}"
+        )
+
+    LOGGER.warning(
+        "MUTATION terminate_postgres_connections application_name=%s user=%s",
+        application_name,
+        FAULT_DB_USER,
+    )
+
+    with _postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pid
+                FROM pg_stat_activity
+                WHERE application_name = %s
+                  AND usename = %s
+                  AND pid <> pg_backend_pid()
+                ORDER BY pid
+                """,
+                (application_name, FAULT_DB_USER),
+            )
+            target_pids = [int(row["pid"]) for row in cur.fetchall()]
+
+            terminated: list[int] = []
+            failed: list[int] = []
+            for pid in target_pids:
+                cur.execute("SELECT pg_terminate_backend(%s) AS terminated", (pid,))
+                row = cur.fetchone() or {}
+                if bool(row.get("terminated")):
+                    terminated.append(pid)
+                else:
+                    failed.append(pid)
+
+    return {
+        "action": "terminate_postgres_connections",
+        "application_name": application_name,
+        "database_user": FAULT_DB_USER,
+        "matched_sessions": len(target_pids),
+        "terminated_sessions": len(terminated),
+        "terminated_pids": terminated,
+        "failed_pids": failed,
+    }
 
 
 if __name__ == "__main__":
