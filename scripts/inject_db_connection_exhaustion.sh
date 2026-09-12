@@ -15,7 +15,7 @@ docker run -d \
   -e DB_PORT=5432 \
   -e DB_NAME=memberdb \
   -e DB_USER=fault_injector \
-  -e DB_PASSWORD=unused-in-training-trust-mode \
+  -e DB_PASSWORD=fault_injector \
   -e DB_APPLICATION_NAME=fault-injector \
   -e FAULT_MAX_CONNECTIONS=100 \
   "$FAULT_IMAGE" \
