@@ -17,8 +17,13 @@ READ_ONLY_TOOL_NAMES = {
     "inspect_container",
     "get_container_logs",
     "read_config",
+    "get_postgres_connection_summary",
 }
-MUTATING_TOOL_NAMES = {"start_container", "restart_container"}
+MUTATING_TOOL_NAMES = {
+    "start_container",
+    "restart_container",
+    "terminate_postgres_connections",
+}
 
 
 @dataclass
