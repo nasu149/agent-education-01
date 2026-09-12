@@ -126,7 +126,7 @@ jobs:
       - run: cp .env.example .env
       - name: Start normal application stack
         run: docker compose up -d --build postgres tomcat httpd
-      - name: Verify connection-exhaustion incident can be injected and recovered
+      - name: Verify connection-exhaustion incident and real MCP remediation
         shell: bash
         run: |
           set -euo pipefail
@@ -176,12 +176,42 @@ jobs:
           connection_count=$(docker compose exec -T postgres \
             psql -U postgres -d memberdb -Atc \
             "select count(*) from pg_stat_activity where usename='fault_injector' and application_name='fault-injector';")
-          echo "fault-injector sessions: $connection_count"
+          echo "fault-injector sessions before MCP remediation: $connection_count"
           test "$connection_count" -ge 10
 
-          echo "Stopping injector should release sessions and recover the application..."
-          docker compose --profile fault stop fault-injector
+          echo "Building Agent image and invoking the real MCP tools..."
+          docker compose build agent
+          docker compose run --rm --no-deps -T agent python - <<'PY'
+          import asyncio
 
+          from agent.mcp_tools import load_tool_catalog
+
+
+          async def main():
+              catalog = await load_tool_catalog()
+              summary_tool = next(
+                  tool for tool in catalog.read_only
+                  if tool.name == "get_postgres_connection_summary"
+              )
+              summary = await summary_tool.ainvoke({})
+              print("MCP connection summary:", summary)
+
+              result = await catalog.mutating["terminate_postgres_connections"].ainvoke(
+                  {"application_name": "fault-injector"}
+              )
+              print("MCP remediation result:", result)
+
+
+          asyncio.run(main())
+          PY
+
+          remaining=$(docker compose exec -T postgres \
+            psql -U postgres -d memberdb -Atc \
+            "select count(*) from pg_stat_activity where usename='fault_injector' and application_name='fault-injector';")
+          echo "fault-injector sessions after MCP remediation: $remaining"
+          test "$remaining" -eq 0
+
+          echo "The injector stays alive but does not reconnect; application should recover..."
           recovered=0
           for _ in $(seq 1 40); do
             if curl -fsS http://localhost:8088/api/members >/dev/null 2>&1; then
