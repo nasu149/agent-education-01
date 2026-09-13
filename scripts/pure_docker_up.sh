@@ -15,6 +15,13 @@ if [[ -z "${GEMINI_API_KEY:-}" ]]; then
   exit 2
 fi
 
+GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash-lite}"
+if [[ "$GEMINI_MODEL" == "gemini-2.5-flash-lite" ]]; then
+  echo "WARNING: GEMINI_MODEL=gemini-2.5-flash-lite is no longer available to new users; using gemini-3.5-flash-lite instead." >&2
+  GEMINI_MODEL="gemini-3.5-flash-lite"
+fi
+echo "==> Gemini model: $GEMINI_MODEL"
+
 cd "$ROOT_DIR"
 
 for container in "$FAULT_CONTAINER" "$AGENT_CONTAINER" "$HTTPD_CONTAINER" "$TOMCAT_CONTAINER" "$POSTGRES_CONTAINER"; do
@@ -90,7 +97,7 @@ docker run -d \
   -p 8090:8090 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
-  -e GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-flash}" \
+  -e GEMINI_MODEL="$GEMINI_MODEL" \
   -e APP_BASE_URL=http://httpd \
   -e TARGET_SERVICES=httpd,tomcat,postgres \
   -e TARGET_HTTPD_CONTAINER="$HTTPD_CONTAINER" \
