@@ -43,7 +43,13 @@ function Invoke-DockerBestEffort {
     return ($exitCode -eq 0)
 }
 
-$GeminiModel = if ($env:GEMINI_MODEL) { $env:GEMINI_MODEL } else { "gemini-2.5-flash" }
+$GeminiModel = if ($env:GEMINI_MODEL) { $env:GEMINI_MODEL } else { "gemini-3.5-flash-lite" }
+if ($GeminiModel -eq "gemini-2.5-flash-lite") {
+    Write-Warning "GEMINI_MODEL=gemini-2.5-flash-lite is no longer available to new users. Using gemini-3.5-flash-lite instead."
+    $GeminiModel = "gemini-3.5-flash-lite"
+}
+Write-Host "==> Gemini model: $GeminiModel"
+
 $HealthCheckInterval = if ($env:HEALTH_CHECK_INTERVAL_SECONDS) { $env:HEALTH_CHECK_INTERVAL_SECONDS } else { "5" }
 $MonitorStartupGrace = if ($env:MONITOR_STARTUP_GRACE_SECONDS) { $env:MONITOR_STARTUP_GRACE_SECONDS } else { "20" }
 $FailureThreshold = if ($env:FAILURE_THRESHOLD) { $env:FAILURE_THRESHOLD } else { "2" }
