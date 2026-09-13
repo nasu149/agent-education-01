@@ -51,16 +51,19 @@ Rules:
 1. Use only the read-only tools you were given.
 2. Prefer observations over assumptions.
 3. Correlate at least two pieces of evidence before concluding when possible.
-4. Start broad (application response / container status), then inspect logs or
-   configuration based on what you observed.
-5. Do not ask to run start/restart commands. You do not have mutation tools.
-6. Do not invent tool output.
-7. When you have enough evidence, stop calling tools and write a short sentence
+4. Start broad (application response / container status), then inspect logs,
+   configuration, or PostgreSQL connection state based on what you observed.
+5. If application logs suggest database connection refusal/exhaustion while the
+   PostgreSQL container is running, use get_postgres_connection_summary rather
+   than assuming the database itself is down.
+6. Do not ask to run mutation tools. You do not have them.
+7. Do not invent tool output.
+8. When you have enough evidence, stop calling tools and write a short sentence
    beginning with "INVESTIGATION_COMPLETE:".
 """
 
 
-def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
+def build_graph(settings: Settings, catalog: ToolCatalog, emit_event, emit_state):
     """Compile and return the completed educational incident graph."""
 
     llm = ChatGoogleGenerativeAI(
@@ -77,11 +80,10 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def investigate(state: IncidentState) -> dict:
         """Let the LLM choose the next read-only observation or finish investigation."""
+        emit_state("investigate", state)
         tool_results_seen = state["investigation_tool_results"]
         messages = [SystemMessage(content=INVESTIGATION_SYSTEM_PROMPT), *state["messages"]]
 
-        # Bound each investigation round. The counter is reset by `judge`, so a
-        # failed remediation may return here and still obtain fresh observations.
         if tool_results_seen >= settings.max_investigation_tool_results:
             emit_event("WARN", "Investigation observation budget reached; forcing a conclusion")
             messages.append(
@@ -106,6 +108,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def tools(state: IncidentState) -> dict:
         """Execute the LLM's selected read-only tools through LangGraph ToolNode."""
+        emit_state("tools", state)
         result = await raw_tool_node.ainvoke(state)
         tool_messages = [
             message
@@ -122,17 +125,22 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def judge(state: IncidentState) -> dict:
         """Convert free-form observations into a strict, inspectable decision."""
+        emit_state("judge", state)
         prompt = [
             SystemMessage(
                 content=(
                     "You are the decision stage of an incident-response workflow. "
-                    "Use ONLY the supplied conversation and tool results. Produce a "
-                    "Diagnosis. Choose start_container only when a target container is "
-                    "observed stopped/exited. Choose restart_container only when a "
-                    "running service clearly needs a restart and restart is sufficient. "
-                    "Choose manual when the required repair is configuration change, "
-                    "credential repair, or anything outside those two safe actions. "
-                    "Choose none when no action is required. Never invent evidence."
+                    "Use ONLY the supplied conversation and tool results. Produce a Diagnosis. "
+                    "Choose start_container only when a target container is observed stopped/exited. "
+                    "Choose restart_container only when a running service clearly needs a restart "
+                    "and restart is sufficient. Choose terminate_postgres_connections only when "
+                    "get_postgres_connection_summary shows an abnormal number of sessions from a "
+                    "specific application_name and the evidence indicates PostgreSQL connection "
+                    "exhaustion. For that action set target_service='postgres' and set "
+                    "target_application to the exact observed application_name. Choose manual when "
+                    "the required repair is configuration change, credential repair, or anything "
+                    "outside the safe actions. Choose none when no action is required. Never invent "
+                    "evidence or an application_name."
                 )
             ),
             *state["messages"],
@@ -144,23 +152,27 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
             (
                 f"Diagnosis: {diagnosis.root_cause} | action="
                 f"{diagnosis.recommended_action} target={diagnosis.target_service} "
-                f"confidence={diagnosis.confidence}"
+                f"application={diagnosis.target_application} confidence={diagnosis.confidence}"
             ),
         )
         return {
             "diagnosis": diagnosis,
-            # A future verify failure begins a fresh investigation round.
             "investigation_tool_results": 0,
         }
 
     def after_judge(state: IncidentState) -> Literal["approval", "report"]:
         diagnosis = state["diagnosis"]
-        if diagnosis and diagnosis.recommended_action in {"start_container", "restart_container"}:
+        if diagnosis and diagnosis.recommended_action in {
+            "start_container",
+            "restart_container",
+            "terminate_postgres_connections",
+        }:
             return "approval"
         return "report"
 
     def approval(state: IncidentState) -> dict:
         """Pause execution before any mutation and wait for a human decision."""
+        emit_state("approval", state)
         diagnosis = state["diagnosis"]
         if diagnosis is None:
             raise RuntimeError("approval node requires diagnosis")
@@ -168,6 +180,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
         payload = ApprovalRequest(
             action=diagnosis.recommended_action,
             target_service=diagnosis.target_service,
+            target_application=diagnosis.target_application,
             root_cause=diagnosis.root_cause,
             evidence=diagnosis.evidence,
             reason=diagnosis.action_reason,
@@ -180,29 +193,34 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def remediate(state: IncidentState) -> dict:
         """Execute exactly the human-approved mutation through MCP."""
+        emit_state("remediate", state)
         diagnosis = state["diagnosis"]
         if diagnosis is None:
             raise RuntimeError("remediate node requires diagnosis")
         if diagnosis.recommended_action not in catalog.mutating:
             raise RuntimeError(f"unsupported remediation: {diagnosis.recommended_action}")
-        if diagnosis.target_service == "none":
-            raise RuntimeError("remediation requires a target service")
 
-        emit_event(
-            "WARN",
-            f"Executing approved action: {diagnosis.recommended_action}({diagnosis.target_service})",
-        )
-        result = await catalog.mutating[diagnosis.recommended_action].ainvoke(
-            {"service": diagnosis.target_service}
-        )
+        action = diagnosis.recommended_action
+        if action == "terminate_postgres_connections":
+            if not diagnosis.target_application or diagnosis.target_application == "none":
+                raise RuntimeError("PostgreSQL connection termination requires target_application")
+            args = {"application_name": diagnosis.target_application}
+            target_text = f"postgres application={diagnosis.target_application}"
+        else:
+            if diagnosis.target_service == "none":
+                raise RuntimeError("container remediation requires a target service")
+            args = {"service": diagnosis.target_service}
+            target_text = diagnosis.target_service
+
+        emit_event("WARN", f"Executing approved action: {action}({target_text})")
+        result = await catalog.mutating[action].ainvoke(args)
         emit_event("INFO", f"Remediation result: {str(result)[:450]}")
         return {
             "messages": [
                 HumanMessage(
                     content=(
                         "Human-approved remediation executed: "
-                        f"{diagnosis.recommended_action}({diagnosis.target_service}). "
-                        f"Tool result: {result}"
+                        f"{action}({target_text}). Tool result: {result}"
                     )
                 )
             ]
@@ -210,6 +228,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def verify(state: IncidentState) -> dict:
         """Re-observe the application after action, allowing service startup time."""
+        emit_state("verify", state)
         http_tool = read_tools["http_request"]
         last_result = None
 
@@ -249,6 +268,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def report(state: IncidentState) -> dict:
         """Produce a concise operational report without another autonomous action."""
+        emit_state("report", state)
         diagnosis = state["diagnosis"]
         if diagnosis is None:
             text = "調査結果: 診断情報を生成できませんでした。人手で確認してください。"
@@ -266,13 +286,17 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
             else:
                 outcome = "自動復旧後も正常性を確認できませんでした。人間へエスカレーションします。"
 
+            target = diagnosis.target_service
+            if diagnosis.target_application != "none":
+                target += f" / application={diagnosis.target_application}"
+
             text = (
                 f"【一次障害対応レポート】\n"
                 f"障害: {state['incident']}\n"
                 f"推定原因: {diagnosis.root_cause}\n"
                 f"確信度: {diagnosis.confidence}\n"
                 f"根拠:\n{evidence}\n"
-                f"提案/実施: {diagnosis.recommended_action} -> {diagnosis.target_service}\n"
+                f"提案/実施: {diagnosis.recommended_action} -> {target}\n"
                 f"結果: {outcome}"
             )
         emit_event("INFO", "Incident report created")

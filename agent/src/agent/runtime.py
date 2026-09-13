@@ -11,8 +11,9 @@ import uuid
 from typing import Any
 
 import httpx
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.types import Command
+from pydantic import BaseModel
 
 from agent.config import Settings
 from agent.graph import build_graph
@@ -31,6 +32,7 @@ class AgentRuntime:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.events: deque[dict[str, str]] = deque(maxlen=250)
+        self.node_history: deque[dict[str, str]] = deque(maxlen=80)
         self.graph = None
         self.catalog = None
         self.monitor_task: asyncio.Task | None = None
@@ -43,6 +45,8 @@ class AgentRuntime:
         self.pending_approval: dict[str, Any] | None = None
         self.last_report: str | None = None
         self.incident_latched = False
+        self.current_node = "monitoring"
+        self.current_state: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -50,8 +54,9 @@ class AgentRuntime:
         if not self.settings.gemini_api_key:
             self.event("ERROR", "GEMINI_API_KEY is empty. Copy .env.example to .env and set the key.")
         self.catalog = await load_tool_catalog()
-        self.graph = build_graph(self.settings, self.catalog, self.event)
+        self.graph = build_graph(self.settings, self.catalog, self.event, self.state_trace)
         self.event("INFO", "MCP tools loaded; LangGraph compiled")
+        self.event("INFO", f"LangGraph console print mode: {self.settings.langgraph_print_mode}")
         self.monitor_task = asyncio.create_task(self._monitor_loop())
 
     async def stop(self) -> None:
@@ -73,6 +78,32 @@ class AgentRuntime:
                 "message": message,
             }
         )
+
+    def state_trace(self, node: str, state: dict[str, Any]) -> None:
+        """Capture the State presented to each node for the training dashboard.
+
+        This is intentionally a display snapshot, not another source of truth.
+        LangGraph still owns the real State and checkpoint. Large message bodies
+        are shortened so a browser can poll this endpoint comfortably.
+        """
+        self.current_node = node
+        self.current_state = _state_for_ui(state)
+        now = datetime.now().strftime("%H:%M:%S")
+        last_node = self.node_history[-1]["node"] if self.node_history else None
+        if node != last_node or node in {"investigate", "tools", "verify"}:
+            self.node_history.append({"time": now, "node": node})
+
+    def _langgraph_print_mode(self):
+        """Translate the classroom env setting to LangGraph's native print_mode.
+
+        ``print_mode`` is a LangGraph runtime feature: it prints streamed graph
+        information to stdout without changing the graph's normal return value.
+        ``updates`` therefore shows each node's partial State update while the UI
+        can continue using the final result and checkpoints exactly as before.
+        """
+        if self.settings.langgraph_print_mode == "off":
+            return ()
+        return self.settings.langgraph_print_mode
 
     async def _monitor_loop(self) -> None:
         while True:
@@ -122,6 +153,7 @@ class AgentRuntime:
             self.active_incident_id = incident_id
             self.active_config = {"configurable": {"thread_id": incident_id}}
             self.pending_approval = None
+            self.node_history.clear()
             self.event("ERROR", f"Incident {incident_id} detected: {incident}")
             initial = {
                 "messages": [HumanMessage(content=incident)],
@@ -133,12 +165,19 @@ class AgentRuntime:
                 "investigation_tool_results": 0,
                 "report": None,
             }
+            self.current_node = "investigate"
+            self.current_state = _state_for_ui(initial)
             try:
-                result = await self.graph.ainvoke(initial, config=self.active_config)
+                result = await self.graph.ainvoke(
+                    initial,
+                    config=self.active_config,
+                    print_mode=self._langgraph_print_mode(),
+                )
                 self._consume_graph_result(result)
             except Exception as exc:
                 LOGGER.exception("Agent execution failed")
                 self.event("ERROR", f"Agent execution failed: {type(exc).__name__}: {exc}")
+                self.current_node = "error"
                 self._finish_incident()
 
     async def approve(self, approved: bool) -> None:
@@ -152,11 +191,13 @@ class AgentRuntime:
                 result = await self.graph.ainvoke(
                     Command(resume=approved),
                     config=self.active_config,
+                    print_mode=self._langgraph_print_mode(),
                 )
                 self._consume_graph_result(result)
             except Exception as exc:
                 LOGGER.exception("Agent resume failed")
                 self.event("ERROR", f"Agent resume failed: {type(exc).__name__}: {exc}")
+                self.current_node = "error"
                 self._finish_incident()
 
     def _consume_graph_result(self, result: dict[str, Any]) -> None:
@@ -164,12 +205,18 @@ class AgentRuntime:
         if interrupts:
             payload = interrupts[0].value
             self.pending_approval = payload
+            self.current_node = "approval"
+            if self.current_state is not None:
+                self.current_state["approval"] = "pending"
             self.event(
                 "WARN",
                 f"Graph paused for approval: {payload.get('action')} {payload.get('target_service')}",
             )
             return
 
+        self.current_state = _state_for_ui(result)
+        self.current_node = "done"
+        self.node_history.append({"time": datetime.now().strftime("%H:%M:%S"), "node": "done"})
         report = result.get("report")
         if report:
             self.last_report = report
@@ -190,5 +237,64 @@ class AgentRuntime:
             "active_incident_id": self.active_incident_id,
             "pending_approval": self.pending_approval,
             "last_report": self.last_report,
+            "current_node": self.current_node,
+            "current_state": self.current_state,
+            "node_history": list(self.node_history),
             "events": list(self.events),
         }
+
+
+def _state_for_ui(state: dict[str, Any]) -> dict[str, Any]:
+    """Create a compact JSON-safe view of IncidentState for teaching."""
+    result: dict[str, Any] = {}
+    for key in (
+        "incident",
+        "diagnosis",
+        "approval",
+        "verification",
+        "verify_attempts",
+        "investigation_tool_results",
+        "report",
+    ):
+        result[key] = _json_safe(state.get(key))
+
+    messages = state.get("messages") or []
+    result["messages_count"] = len(messages)
+    result["messages"] = [_message_for_ui(message) for message in messages[-8:]]
+    return result
+
+
+def _message_for_ui(message: Any) -> dict[str, Any]:
+    if isinstance(message, BaseMessage):
+        item: dict[str, Any] = {
+            "type": message.type,
+            "content": _shorten(message.content, 900),
+        }
+        name = getattr(message, "name", None)
+        if name:
+            item["name"] = name
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls:
+            item["tool_calls"] = [call.get("name", "unknown") for call in tool_calls]
+        return item
+    return {"type": type(message).__name__, "content": _shorten(message, 900)}
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, BaseMessage):
+        return _message_for_ui(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _shorten(value: Any, limit: int) -> str:
+    text = value if isinstance(value, str) else str(value)
+    text = text.replace("\x00", "")
+    return text if len(text) <= limit else text[:limit] + "…"

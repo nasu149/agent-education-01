@@ -69,7 +69,7 @@ verify ---- NG ---> investigate            |
 ## 必要なもの
 
 - Docker Desktop / Docker Engine
-- Docker Compose v2
+- Docker Compose v2（`docker compose` で起動する場合のみ。後述の pure Docker 起動では不要）
 - Gemini Developer API の API key
 - ブラウザ
 
@@ -78,6 +78,8 @@ verify ---- NG ---> investigate            |
 > Windows 11 + Docker Desktop の Linux Containers を主な想定にしています。Agent コンテナは Docker socket を read/write mount するため、研修専用PC・研修専用環境で使ってください。
 
 ## 起動
+
+### Docker Compose を使う場合
 
 PowerShell:
 
@@ -97,13 +99,163 @@ docker compose up -d --build
 docker compose logs -f agent
 ```
 
+### Docker Compose を使わない場合（pure Docker）
+
+`experiment/db-connection-exhaustion` には、`docker build` / `docker network create` / `docker volume create` / `docker run` だけで環境を立ち上げるスクリプトがあります。
+
+#### Windows PowerShell
+
+リポジトリのルートで次を実行してください。
+
+```powershell
+# 初回だけ。対象ブランチへ切り替える
+# すでにローカルブランチがある場合は: git switch experiment/db-connection-exhaustion
+git fetch origin
+git switch --track origin/experiment/db-connection-exhaustion
+
+# Gemini API key を環境変数へ設定
+$env:GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'
+
+# 必要なら model も変更可能
+# $env:GEMINI_MODEL = 'gemini-2.5-flash'
+
+.\scripts\pure_docker_up.ps1
+```
+
+PowerShell の実行ポリシーで `.ps1` がブロックされる場合は、その PowerShell セッションだけ次を実行してから再度起動してください。
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\pure_docker_up.ps1
+```
+
+#### Oracle Linux / Linux / Git Bash
+
+```bash
+# 初回だけ。対象ブランチへ切り替える
+# すでにローカルブランチがある場合は: git switch experiment/db-connection-exhaustion
+git fetch origin
+git switch --track origin/experiment/db-connection-exhaustion
+
+# Gemini API key を環境変数へ設定
+export GEMINI_API_KEY='YOUR_GEMINI_API_KEY'
+
+# 必要なら model も変更可能
+# export GEMINI_MODEL='gemini-2.5-flash'
+
+chmod +x scripts/*.sh
+./scripts/pure_docker_up.sh
+```
+
+`pure_docker_up.ps1` / `pure_docker_up.sh` は以下を自動で実行します。
+
+1. PostgreSQL / Tomcat / httpd / Agent / fault-injector の Docker image を build
+2. `agent-education-net` network を作成
+3. `agent-education-postgres-data` volume を作成
+4. PostgreSQL を起動し、ready になるまで待機
+5. Tomcat を起動
+6. httpd を起動
+7. Agent を起動
+
+起動確認:
+
+```powershell
+docker ps
+Invoke-WebRequest http://localhost:8088 -Method Head
+Invoke-RestMethod http://localhost:8090/api/status
+```
+
+または bash:
+
+```bash
+docker ps
+curl -I http://localhost:8088
+curl http://localhost:8090/api/status
+```
+
+Agent のログはどちらの環境でも次で確認できます。
+
+```text
+docker logs -f agent-education-agent
+```
+
+このスクリプトはデフォルトで起動時に DB volume を作り直します。DB データを残したい場合は次のように起動します。
+
+PowerShell:
+
+```powershell
+$env:RESET_DB_DATA = '0'
+.\scripts\pure_docker_up.ps1
+```
+
+bash:
+
+```bash
+RESET_DB_DATA=0 ./scripts/pure_docker_up.sh
+```
+
+#### DB connection exhaustion 障害を注入する
+
+正常起動後、別ターミナルで次を実行します。
+
+PowerShell:
+
+```powershell
+.\scripts\inject_db_connection_exhaustion.ps1
+```
+
+bash:
+
+```bash
+./scripts/inject_db_connection_exhaustion.sh
+```
+
+このスクリプトは `fault_injector` ユーザーで PostgreSQL 接続を大量に保持し、connection exhaustion を発生させます。
+
+障害注入側のログ:
+
+```text
+docker logs -f agent-education-fault-injector
+```
+
+Agent が HTTP 異常を検知すると、PostgreSQL の接続状況を調査し、対象接続の切断について Human-in-the-loop の承認を求める想定です。
+
+#### pure Docker 環境を停止する
+
+PowerShell:
+
+```powershell
+.\scripts\pure_docker_down.ps1
+```
+
+bash:
+
+```bash
+./scripts/pure_docker_down.sh
+```
+
+デフォルトでは DB volume も削除します。DB データを残す場合:
+
+PowerShell:
+
+```powershell
+$env:KEEP_DB_DATA = '1'
+.\scripts\pure_docker_down.ps1
+```
+
+bash:
+
+```bash
+KEEP_DB_DATA=1 ./scripts/pure_docker_down.sh
+```
+
 起動後:
 
 - 名簿アプリ: http://localhost:8088
 - Agent dashboard: http://localhost:8090
 - Agent status API: http://localhost:8090/api/status
 
-初回は Maven / Python package / Docker image の取得があるため、講師は研修前に全端末で一度 `docker compose build` してください。
+初回は Maven / Python package / Docker image の取得があるため、講師は研修前に全端末で一度 build してください。Compose を使う場合は `docker compose build`、pure Docker の場合は `pure_docker_up.ps1` または `pure_docker_up.sh` で build まで行われます。
 
 ## 正常状態
 
@@ -179,10 +331,16 @@ mutation Tool は `approval` を通過した `remediate` node だけが呼べま
 
 ## デバッグログ
 
-リアルタイム:
+Docker Compose の場合:
 
 ```bash
 docker compose logs -f agent
+```
+
+pure Docker の場合:
+
+```bash
+docker logs -f agent-education-agent
 ```
 
 ホストにも保存されます:
@@ -218,6 +376,20 @@ bash:
 ./scripts/inject_fault.sh postgres-stop
 ./scripts/inject_fault.sh proxy-port
 ./scripts/inject_fault.sh db-password
+```
+
+`experiment/db-connection-exhaustion` の connection exhaustion 障害は、pure Docker 起動後に次で注入できます。
+
+PowerShell:
+
+```powershell
+.\scripts\inject_db_connection_exhaustion.ps1
+```
+
+bash:
+
+```bash
+./scripts/inject_db_connection_exhaustion.sh
 ```
 
 ### Level 1: `tomcat-stop`
@@ -280,6 +452,22 @@ bash:
 ./scripts/reset.sh
 ```
 
+pure Docker の場合:
+
+PowerShell:
+
+```powershell
+.\scripts\pure_docker_down.ps1
+.\scripts\pure_docker_up.ps1
+```
+
+bash:
+
+```bash
+./scripts/pure_docker_down.sh
+./scripts/pure_docker_up.sh
+```
+
 DB volume を含めて作り直すため、次のチーム演習を完全な正常状態から始められます。
 
 ## 午前講義 → 午後ハンズオンのシナリオ
@@ -305,7 +493,7 @@ DB volume を含めて作り直すため、次のチーム演習を完全な正�
 
 ### 13:00-13:20: 環境確認
 
-- `docker compose up`
+- `docker compose up` または `pure_docker_up.ps1` / `pure_docker_up.sh`
 - 名簿アプリを見る
 - Agent dashboardを見る
 - MCP Tool一覧を確認

@@ -17,10 +17,18 @@ class Diagnosis(BaseModel):
     recommended_action: Literal[
         "start_container",
         "restart_container",
+        "terminate_postgres_connections",
         "manual",
         "none",
     ] = Field(description="Smallest safe remediation available to this Agent.")
     target_service: Literal["httpd", "tomcat", "postgres", "none"]
+    target_application: str = Field(
+        default="none",
+        description=(
+            "PostgreSQL application_name to terminate when recommended_action is "
+            "terminate_postgres_connections; otherwise use 'none'."
+        ),
+    )
     action_reason: str = Field(description="Why this action is appropriate and safe enough to propose.")
     confidence: Literal["low", "medium", "high"]
 
@@ -30,6 +38,7 @@ class ApprovalRequest(BaseModel):
 
     action: str
     target_service: str
+    target_application: str = "none"
     root_cause: str
     evidence: list[str]
     reason: str

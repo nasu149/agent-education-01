@@ -6,6 +6,9 @@ from dataclasses import dataclass
 import os
 
 
+_LANGGRAPH_PRINT_MODES = {"off", "updates", "values", "debug"}
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime configuration.
@@ -24,6 +27,7 @@ class Settings:
     failure_threshold: int
     max_investigation_tool_results: int
     verify_retry_limit: int
+    langgraph_print_mode: str
     log_level: str
 
     @classmethod
@@ -33,9 +37,18 @@ class Settings:
             for item in os.getenv("TARGET_SERVICES", "httpd,tomcat,postgres").split(",")
             if item.strip()
         )
+        langgraph_print_mode = os.getenv("LANGGRAPH_PRINT_MODE", "updates").strip().lower()
+        if langgraph_print_mode in {"", "none", "false", "0"}:
+            langgraph_print_mode = "off"
+        if langgraph_print_mode not in _LANGGRAPH_PRINT_MODES:
+            allowed = ", ".join(sorted(_LANGGRAPH_PRINT_MODES))
+            raise ValueError(
+                f"LANGGRAPH_PRINT_MODE must be one of {allowed}; got {langgraph_print_mode!r}"
+            )
+
         return cls(
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             app_base_url=os.getenv("APP_BASE_URL", "http://httpd").rstrip("/"),
             target_compose_project=os.getenv("TARGET_COMPOSE_PROJECT", "agent-education"),
             target_services=services,
@@ -44,5 +57,6 @@ class Settings:
             failure_threshold=int(os.getenv("FAILURE_THRESHOLD", "2")),
             max_investigation_tool_results=int(os.getenv("MAX_INVESTIGATION_TOOL_RESULTS", "6")),
             verify_retry_limit=int(os.getenv("VERIFY_RETRY_LIMIT", "1")),
+            langgraph_print_mode=langgraph_print_mode,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         )
