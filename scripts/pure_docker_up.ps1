@@ -48,7 +48,9 @@ if ($GeminiModel -eq "gemini-2.5-flash-lite") {
     Write-Warning "GEMINI_MODEL=gemini-2.5-flash-lite is no longer available to new users. Using gemini-3.5-flash-lite instead."
     $GeminiModel = "gemini-3.5-flash-lite"
 }
+$LangGraphPrintMode = if ($env:LANGGRAPH_PRINT_MODE) { $env:LANGGRAPH_PRINT_MODE } else { "updates" }
 Write-Host "==> Gemini model: $GeminiModel"
+Write-Host "==> LangGraph console print mode: $LangGraphPrintMode"
 
 $HealthCheckInterval = if ($env:HEALTH_CHECK_INTERVAL_SECONDS) { $env:HEALTH_CHECK_INTERVAL_SECONDS } else { "5" }
 $MonitorStartupGrace = if ($env:MONITOR_STARTUP_GRACE_SECONDS) { $env:MONITOR_STARTUP_GRACE_SECONDS } else { "20" }
@@ -143,6 +145,7 @@ try {
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-e", "GEMINI_API_KEY=$($env:GEMINI_API_KEY)",
         "-e", "GEMINI_MODEL=$GeminiModel",
+        "-e", "LANGGRAPH_PRINT_MODE=$LangGraphPrintMode",
         "-e", "APP_BASE_URL=http://httpd",
         "-e", "TARGET_SERVICES=httpd,tomcat,postgres",
         "-e", "TARGET_HTTPD_CONTAINER=$HttpdContainer",
@@ -168,6 +171,9 @@ try {
     Write-Host "Started with plain Docker commands only."
     Write-Host "Application: http://localhost:8088"
     Write-Host "Agent UI:    http://localhost:8090"
+    Write-Host ""
+    Write-Host "Agent log / LangGraph State updates:"
+    Write-Host "  docker logs -f agent-education-agent"
     Write-Host ""
     Write-Host "Inject the incident with:"
     Write-Host "  .\scripts\inject_db_connection_exhaustion.ps1"
