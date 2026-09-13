@@ -35,7 +35,7 @@ class Settings:
         )
         return cls(
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             app_base_url=os.getenv("APP_BASE_URL", "http://httpd").rstrip("/"),
             target_compose_project=os.getenv("TARGET_COMPOSE_PROJECT", "agent-education"),
             target_services=services,
