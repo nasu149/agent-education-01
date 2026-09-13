@@ -20,7 +20,9 @@ if [[ "$GEMINI_MODEL" == "gemini-2.5-flash-lite" ]]; then
   echo "WARNING: GEMINI_MODEL=gemini-2.5-flash-lite is no longer available to new users; using gemini-3.5-flash-lite instead." >&2
   GEMINI_MODEL="gemini-3.5-flash-lite"
 fi
+LANGGRAPH_PRINT_MODE="${LANGGRAPH_PRINT_MODE:-updates}"
 echo "==> Gemini model: $GEMINI_MODEL"
+echo "==> LangGraph console print mode: $LANGGRAPH_PRINT_MODE"
 
 cd "$ROOT_DIR"
 
@@ -98,6 +100,7 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
   -e GEMINI_MODEL="$GEMINI_MODEL" \
+  -e LANGGRAPH_PRINT_MODE="$LANGGRAPH_PRINT_MODE" \
   -e APP_BASE_URL=http://httpd \
   -e TARGET_SERVICES=httpd,tomcat,postgres \
   -e TARGET_HTTPD_CONTAINER="$HTTPD_CONTAINER" \
@@ -123,6 +126,9 @@ echo
 echo "Started with plain Docker commands only."
 echo "Application: http://localhost:8088"
 echo "Agent UI:    http://localhost:8090"
+echo
+echo "Agent log / LangGraph State updates:"
+echo "  docker logs -f agent-education-agent"
 echo
 echo "Inject the incident with:"
 echo "  ./scripts/inject_db_connection_exhaustion.sh"
