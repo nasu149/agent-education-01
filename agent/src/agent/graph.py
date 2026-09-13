@@ -63,7 +63,7 @@ Rules:
 """
 
 
-def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
+def build_graph(settings: Settings, catalog: ToolCatalog, emit_event, emit_state):
     """Compile and return the completed educational incident graph."""
 
     llm = ChatGoogleGenerativeAI(
@@ -80,6 +80,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def investigate(state: IncidentState) -> dict:
         """Let the LLM choose the next read-only observation or finish investigation."""
+        emit_state("investigate", state)
         tool_results_seen = state["investigation_tool_results"]
         messages = [SystemMessage(content=INVESTIGATION_SYSTEM_PROMPT), *state["messages"]]
 
@@ -107,6 +108,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def tools(state: IncidentState) -> dict:
         """Execute the LLM's selected read-only tools through LangGraph ToolNode."""
+        emit_state("tools", state)
         result = await raw_tool_node.ainvoke(state)
         tool_messages = [
             message
@@ -123,6 +125,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def judge(state: IncidentState) -> dict:
         """Convert free-form observations into a strict, inspectable decision."""
+        emit_state("judge", state)
         prompt = [
             SystemMessage(
                 content=(
@@ -169,6 +172,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     def approval(state: IncidentState) -> dict:
         """Pause execution before any mutation and wait for a human decision."""
+        emit_state("approval", state)
         diagnosis = state["diagnosis"]
         if diagnosis is None:
             raise RuntimeError("approval node requires diagnosis")
@@ -189,6 +193,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def remediate(state: IncidentState) -> dict:
         """Execute exactly the human-approved mutation through MCP."""
+        emit_state("remediate", state)
         diagnosis = state["diagnosis"]
         if diagnosis is None:
             raise RuntimeError("remediate node requires diagnosis")
@@ -223,6 +228,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def verify(state: IncidentState) -> dict:
         """Re-observe the application after action, allowing service startup time."""
+        emit_state("verify", state)
         http_tool = read_tools["http_request"]
         last_result = None
 
@@ -262,6 +268,7 @@ def build_graph(settings: Settings, catalog: ToolCatalog, emit_event):
 
     async def report(state: IncidentState) -> dict:
         """Produce a concise operational report without another autonomous action."""
+        emit_state("report", state)
         diagnosis = state["diagnosis"]
         if diagnosis is None:
             text = "調査結果: 診断情報を生成できませんでした。人手で確認してください。"
