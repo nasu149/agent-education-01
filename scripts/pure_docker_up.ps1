@@ -22,6 +22,27 @@ function Invoke-Docker {
     }
 }
 
+# Windows PowerShell can convert stderr from native commands into a
+# NativeCommandError when ErrorActionPreference is Stop. Some Docker commands
+# below are intentionally allowed to fail (for example removing a container
+# that does not exist yet, or pg_isready while PostgreSQL is still starting).
+# Run those commands with errors suppressed and return only success/failure.
+function Invoke-DockerBestEffort {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & docker @Arguments *> $null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    return ($exitCode -eq 0)
+}
+
 $GeminiModel = if ($env:GEMINI_MODEL) { $env:GEMINI_MODEL } else { "gemini-2.5-flash" }
 $HealthCheckInterval = if ($env:HEALTH_CHECK_INTERVAL_SECONDS) { $env:HEALTH_CHECK_INTERVAL_SECONDS } else { "5" }
 $MonitorStartupGrace = if ($env:MONITOR_STARTUP_GRACE_SECONDS) { $env:MONITOR_STARTUP_GRACE_SECONDS } else { "20" }
@@ -33,12 +54,12 @@ $LogLevel = if ($env:LOG_LEVEL) { $env:LOG_LEVEL } else { "INFO" }
 Push-Location $RootDir
 try {
     foreach ($container in @($FaultContainer, $AgentContainer, $HttpdContainer, $TomcatContainer, $PostgresContainer)) {
-        & docker rm -f $container 2>$null | Out-Null
+        [void](Invoke-DockerBestEffort @("rm", "-f", $container))
     }
 
-    & docker network rm $Network 2>$null | Out-Null
+    [void](Invoke-DockerBestEffort @("network", "rm", $Network))
     if ($env:RESET_DB_DATA -ne "0") {
-        & docker volume rm $Volume 2>$null | Out-Null
+        [void](Invoke-DockerBestEffort @("volume", "rm", $Volume))
     }
 
     Write-Host "==> Building training images"
@@ -70,14 +91,15 @@ try {
 
     $postgresReady = $false
     for ($i = 0; $i -lt 40; $i++) {
-        & docker exec $PostgresContainer pg_isready -U postgres -d memberdb 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
+        if (Invoke-DockerBestEffort @("exec", $PostgresContainer, "pg_isready", "-U", "postgres", "-d", "memberdb")) {
             $postgresReady = $true
             break
         }
         Start-Sleep -Seconds 1
     }
     if (-not $postgresReady) {
+        Write-Host "PostgreSQL logs:" -ForegroundColor Yellow
+        & docker logs $PostgresContainer
         throw "PostgreSQL did not become ready within 40 seconds."
     }
 
