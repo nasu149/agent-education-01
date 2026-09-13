@@ -4,7 +4,24 @@ $Network = if ($env:TRAINING_DOCKER_NETWORK) { $env:TRAINING_DOCKER_NETWORK } el
 $FaultContainer = if ($env:FAULT_CONTAINER_NAME) { $env:FAULT_CONTAINER_NAME } else { "agent-education-fault-injector" }
 $FaultImage = if ($env:FAULT_IMAGE_NAME) { $env:FAULT_IMAGE_NAME } else { "agent-education-fault-injector" }
 
-& docker rm -f $FaultContainer 2>$null | Out-Null
+function Invoke-DockerBestEffort {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & docker @Arguments *> $null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    return ($exitCode -eq 0)
+}
+
+# It is normal for the injector container not to exist before the first run.
+[void](Invoke-DockerBestEffort @("rm", "-f", $FaultContainer))
 
 Write-Host "Starting connection-exhaustion injector..."
 & docker run -d `
@@ -31,9 +48,9 @@ for ($i = 0; $i -lt 40; $i++) {
         break
     }
 
-    $running = (& docker inspect -f "{{.State.Running}}" $FaultContainer 2>$null) -join ""
-    if ($running -ne "true") {
-        Write-Error "Fault injector exited unexpectedly:"
+    $running = (& docker inspect -f "{{.State.Running}}" $FaultContainer) -join ""
+    if ($LASTEXITCODE -ne 0 -or $running -ne "true") {
+        Write-Host "Fault injector exited unexpectedly:" -ForegroundColor Red
         & docker logs $FaultContainer
         exit 1
     }
