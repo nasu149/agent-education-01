@@ -56,6 +56,7 @@ class AgentRuntime:
         self.catalog = await load_tool_catalog()
         self.graph = build_graph(self.settings, self.catalog, self.event, self.state_trace)
         self.event("INFO", "MCP tools loaded; LangGraph compiled")
+        self.event("INFO", f"LangGraph console print mode: {self.settings.langgraph_print_mode}")
         self.monitor_task = asyncio.create_task(self._monitor_loop())
 
     async def stop(self) -> None:
@@ -91,6 +92,18 @@ class AgentRuntime:
         last_node = self.node_history[-1]["node"] if self.node_history else None
         if node != last_node or node in {"investigate", "tools", "verify"}:
             self.node_history.append({"time": now, "node": node})
+
+    def _langgraph_print_mode(self):
+        """Translate the classroom env setting to LangGraph's native print_mode.
+
+        ``print_mode`` is a LangGraph runtime feature: it prints streamed graph
+        information to stdout without changing the graph's normal return value.
+        ``updates`` therefore shows each node's partial State update while the UI
+        can continue using the final result and checkpoints exactly as before.
+        """
+        if self.settings.langgraph_print_mode == "off":
+            return ()
+        return self.settings.langgraph_print_mode
 
     async def _monitor_loop(self) -> None:
         while True:
@@ -155,7 +168,11 @@ class AgentRuntime:
             self.current_node = "investigate"
             self.current_state = _state_for_ui(initial)
             try:
-                result = await self.graph.ainvoke(initial, config=self.active_config)
+                result = await self.graph.ainvoke(
+                    initial,
+                    config=self.active_config,
+                    print_mode=self._langgraph_print_mode(),
+                )
                 self._consume_graph_result(result)
             except Exception as exc:
                 LOGGER.exception("Agent execution failed")
@@ -174,6 +191,7 @@ class AgentRuntime:
                 result = await self.graph.ainvoke(
                     Command(resume=approved),
                     config=self.active_config,
+                    print_mode=self._langgraph_print_mode(),
                 )
                 self._consume_graph_result(result)
             except Exception as exc:
