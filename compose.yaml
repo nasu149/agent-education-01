@@ -52,6 +52,7 @@ services:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      LANGGRAPH_PRINT_MODE: ${LANGGRAPH_PRINT_MODE:-updates}
       APP_BASE_URL: http://httpd
       TARGET_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-agent-education}
       TARGET_SERVICES: httpd,tomcat,postgres
