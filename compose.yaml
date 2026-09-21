@@ -52,6 +52,7 @@ services:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-90}
       LANGGRAPH_PRINT_MODE: ${LANGGRAPH_PRINT_MODE:-updates}
       APP_BASE_URL: http://httpd
       TARGET_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-agent-education}
