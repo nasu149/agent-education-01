@@ -8,16 +8,19 @@ HITL（Human-in-the-loop）は、復旧操作の前に人間の判断を挟む�
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from agent.config import Settings
 from agent.logging_setup import configure_logging
 from agent.models import ApprovalBody
 from agent.runtime import AgentRuntime
-from agent.ui import PAGE
 
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 settings = Settings.from_env()
 configure_logging(settings.log_level)
@@ -40,16 +43,17 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Agent Education Runtime", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index() -> str:
+@app.get("/", response_class=FileResponse)
+async def index() -> FileResponse:
     """GET / に対して、研修用ダッシュボードの HTML を返す。
 
-    ui.py の PAGE をそのまま返し、HTMLResponse によって HTML として配信する。
+    static/index.html を配信し、CSS と JavaScript は /static から読み込む。
     監視状況などの動的な情報は、画面内の JavaScript が別途 /api/status から取得する。
     """
-    return PAGE
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
 
 
 @app.get("/api/status")
