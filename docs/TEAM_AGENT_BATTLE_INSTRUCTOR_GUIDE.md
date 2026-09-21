@@ -21,11 +21,14 @@ git fetch origin
 git switch --track origin/training/team-agent-battle
 ```
 
-Gemini key:
+設定ファイル:
 
 ```bash
-export GEMINI_API_KEY='...'
+cp .env.example .env
+# .env を編集して GEMINI_API_KEY などを設定
 ```
+
+`pure_docker_up.sh` / `battle_start_agent.sh` もこの `.env` を読み込みます。
 
 script:
 
@@ -148,17 +151,45 @@ agent-education-agent   team-c
 
 競技設定は全チーム共通です。
 
-`battle_start_agent.sh` はデフォルトで次を使用します。
+`battle_start_agent.sh` はリポジトリ直下の `.env` を読みます。
+`.env.example` の初期値は次です。
+
+```text
+HEALTH_CHECK_INTERVAL_SECONDS=5
+MONITOR_STARTUP_GRACE_SECONDS=20
+FAILURE_THRESHOLD=2
+MAX_INVESTIGATION_TOOL_RESULTS=8
+VERIFY_RETRY_LIMIT=1
+GEMINI_TIMEOUT_SECONDS=90
+```
+
+競技を短い待ち時間で回したい場合は、全チーム共通の `.env` で例えば次のように変更して構いません。
 
 ```text
 HEALTH_CHECK_INTERVAL_SECONDS=3
 MONITOR_STARTUP_GRACE_SECONDS=3
 FAILURE_THRESHOLD=1
-MAX_INVESTIGATION_TOOL_RESULTS=8
-VERIFY_RETRY_LIMIT=1
 ```
 
 変更する場合は全チームで同じ値を使用してください。
+
+### ログの見分け方
+
+```text
+GET /api/status
+```
+
+が約1.5秒ごとに出るのは Dashboard の表示更新です。ヘルスチェックではありません。
+
+実際のヘルスチェックは Agent から対象システムへの
+
+```text
+GET http://httpd/api/members
+```
+
+で、`HEALTH_CHECK_INTERVAL_SECONDS` に従います。
+
+Agent 起動時にも、実際に採用された interval / startup grace / failure threshold / Gemini timeout をログ出力します。
 
 ---
 
