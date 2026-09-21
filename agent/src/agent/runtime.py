@@ -77,6 +77,22 @@ class AgentRuntime:
         self.catalog = await load_tool_catalog()
         self.graph = build_graph(self.settings, self.catalog, self.event, self.state_trace)
         self.event("INFO", "MCP tools loaded; LangGraph compiled")
+        self.event(
+            "INFO",
+            (
+                "Health checker settings: "
+                f"interval={self.settings.health_check_interval_seconds}s, "
+                f"startup_grace={self.settings.monitor_startup_grace_seconds}s, "
+                f"failure_threshold={self.settings.failure_threshold}"
+            ),
+        )
+        self.event(
+            "INFO",
+            (
+                f"Gemini settings: model={self.settings.gemini_model}, "
+                f"timeout={self.settings.gemini_timeout_seconds}s"
+            ),
+        )
         self.event("INFO", f"LangGraph console print mode: {self.settings.langgraph_print_mode}")
         self.monitor_task = asyncio.create_task(self._monitor_loop())
 
