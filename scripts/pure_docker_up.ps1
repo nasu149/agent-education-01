@@ -1,6 +1,46 @@
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $PSScriptRoot
+
+function Import-DotEnv {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $lineNumber = 0
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $lineNumber++
+        if ($line -match '^\s*(#.*)?$') {
+            continue
+        }
+        if ($line -notmatch '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            throw "Invalid .env assignment at line $lineNumber. Expected NAME=value."
+        }
+
+        $name = $Matches[1]
+        $value = $Matches[2].Trim()
+        # Read values as literal text; never execute .env contents.
+        if ($value.StartsWith('"') -or $value.StartsWith("'")) {
+            if ($value -notmatch '^(["''])(.*?)\1\s*(?:#.*)?$') {
+                throw "Invalid .env quoted value at line $lineNumber."
+            }
+            $value = $Matches[2]
+        }
+        else {
+            $value = ($value -replace '\s+#.*$', '').TrimEnd()
+        }
+
+        # Explicit process environment settings take precedence over .env.
+        if ($null -eq [Environment]::GetEnvironmentVariable($name, 'Process')) {
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+    }
+}
+
+Import-DotEnv -Path (Join-Path $RootDir '.env')
+
 $Network = "agent-education-net"
 $Volume = "agent-education-postgres-data"
 $PostgresContainer = "agent-education-postgres"
@@ -10,7 +50,7 @@ $AgentContainer = "agent-education-agent"
 $FaultContainer = "agent-education-fault-injector"
 
 if ([string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
-    throw "GEMINI_API_KEY is required. Example: `$env:GEMINI_API_KEY='...'"
+    throw "GEMINI_API_KEY is required. Set it in $RootDir\.env or use `$env:GEMINI_API_KEY='...'."
 }
 
 function Invoke-Docker {

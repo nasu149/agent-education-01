@@ -1,6 +1,8 @@
 package training.memberapp;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -15,6 +17,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.logging.Logger;
 
 /**
  * Minimal CRUD servlet used as the system-under-operation in the Agent workshop.
@@ -23,7 +27,45 @@ import java.util.Map;
  * operational Agent, not to this business application.</p>
  */
 public class MemberServlet extends HttpServlet {
+    private static final Logger LOGGER = Logger.getLogger(MemberServlet.class.getName());
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Override
+    protected void service(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String requestId = UUID.randomUUID().toString();
+        request.setAttribute("requestId", requestId);
+        response.setHeader("X-Request-ID", requestId);
+        long started = System.nanoTime();
+        try {
+            super.service(request, response);
+        } catch (JsonProcessingException ex) {
+            LOGGER.warning("requestId=" + requestId + " invalid_json");
+            json(response, HttpServletResponse.SC_BAD_REQUEST, Map.of("error", "valid JSON object is required"));
+        } catch (IllegalArgumentException ex) {
+            LOGGER.warning("requestId=" + requestId + " validation_failed reason=" + ex.getMessage());
+            json(response, HttpServletResponse.SC_BAD_REQUEST, Map.of("error", ex.getMessage()));
+        } catch (ServletException | IOException | RuntimeException ex) {
+            LOGGER.severe("requestId=" + requestId + " unhandled_failure type=" + ex.getClass().getSimpleName());
+            if (!response.isCommitted()) {
+                response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            }
+            throw ex;
+        } finally {
+            LOGGER.info("requestId=" + requestId + " method=" + logValue(request.getMethod())
+                    + " path=" + logValue(request.getRequestURI())
+                    + " contentType=" + logValue(request.getContentType())
+                    + " status=" + response.getStatus()
+                    + " durationMs=" + (System.nanoTime() - started) / 1_000_000);
+        }
+    }
+
+    private String logValue(String value) {
+        if (value == null) {
+            return "none";
+        }
+        return value.replaceAll("[\\r\\n\\t]", "_").substring(0, Math.min(value.length(), 200));
+    }
 
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -52,20 +94,18 @@ public class MemberServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        Map<?, ?> body = mapper.readValue(request.getInputStream(), Map.class);
+        Map<String, String> body = readMember(request);
         String sql = "INSERT INTO members(name, department, email) VALUES (?, ?, ?) RETURNING id";
 
         try (Connection connection = Database.open();
              PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, required(body, "name"));
-            statement.setString(2, required(body, "department"));
-            statement.setString(3, required(body, "email"));
+            statement.setString(1, body.get("name"));
+            statement.setString(2, body.get("department"));
+            statement.setString(3, body.get("email"));
             try (ResultSet rs = statement.executeQuery()) {
                 rs.next();
                 json(response, HttpServletResponse.SC_CREATED, Map.of("id", rs.getLong(1)));
             }
-        } catch (IllegalArgumentException ex) {
-            json(response, HttpServletResponse.SC_BAD_REQUEST, Map.of("error", ex.getMessage()));
         } catch (SQLException ex) {
             databaseFailure("POST", ex, response);
         }
@@ -74,14 +114,14 @@ public class MemberServlet extends HttpServlet {
     @Override
     protected void doPut(HttpServletRequest request, HttpServletResponse response) throws IOException {
         long id = idFromPath(request);
-        Map<?, ?> body = mapper.readValue(request.getInputStream(), Map.class);
+        Map<String, String> body = readMember(request);
         String sql = "UPDATE members SET name=?, department=?, email=? WHERE id=?";
 
         try (Connection connection = Database.open();
              PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, required(body, "name"));
-            statement.setString(2, required(body, "department"));
-            statement.setString(3, required(body, "email"));
+            statement.setString(1, body.get("name"));
+            statement.setString(2, body.get("department"));
+            statement.setString(3, body.get("email"));
             statement.setLong(4, id);
             int count = statement.executeUpdate();
             if (count == 0) {
@@ -89,8 +129,6 @@ public class MemberServlet extends HttpServlet {
                 return;
             }
             json(response, HttpServletResponse.SC_OK, Map.of("updated", id));
-        } catch (IllegalArgumentException ex) {
-            json(response, HttpServletResponse.SC_BAD_REQUEST, Map.of("error", ex.getMessage()));
         } catch (SQLException ex) {
             databaseFailure("PUT", ex, response);
         }
@@ -118,13 +156,48 @@ public class MemberServlet extends HttpServlet {
         if (path == null || path.equals("/") || path.length() < 2) {
             throw new IllegalArgumentException("member id is required in path");
         }
-        return Long.parseLong(path.substring(1));
+        try {
+            long id = Long.parseLong(path.substring(1));
+            if (id <= 0) {
+                throw new NumberFormatException();
+            }
+            return id;
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("member id must be a positive integer");
+        }
+    }
+
+    private Map<String, String> readMember(HttpServletRequest request) throws IOException {
+        Map<?, ?> body = mapper.readValue(request.getInputStream(), Map.class);
+        if (body == null) {
+            throw new IllegalArgumentException("valid JSON object is required");
+        }
+        LOGGER.info("requestId=" + request.getAttribute("requestId") + " member_payload"
+                + " name=" + fieldState(body.get("name"))
+                + " department=" + fieldState(body.get("department"))
+                + " email=" + fieldState(body.get("email")));
+        // Validate before opening a database connection.
+        return Map.of("name", required(body, "name"),
+                "department", required(body, "department"), "email", required(body, "email"));
+    }
+
+    private String fieldState(Object value) {
+        if (value == null) {
+            return "missing_or_null";
+        }
+        if (!(value instanceof String)) {
+            return "invalid_type";
+        }
+        return ((String) value).isBlank() ? "blank" : "present";
     }
 
     private String required(Map<?, ?> body, String key) {
         Object value = body.get(key);
         if (value == null || value.toString().isBlank()) {
             throw new IllegalArgumentException(key + " is required");
+        }
+        if (!(value instanceof String)) {
+            throw new IllegalArgumentException(key + " must be a string");
         }
         return value.toString();
     }
@@ -139,7 +212,9 @@ public class MemberServlet extends HttpServlet {
     }
 
     private void databaseFailure(String operation, SQLException ex, HttpServletResponse response) throws IOException {
-        getServletContext().log("Database failure during " + operation + ": " + ex.getMessage(), ex);
+        LOGGER.severe("requestId=" + response.getHeader("X-Request-ID")
+                + " database_failure operation=" + operation + " sqlState=" + ex.getSQLState()
+                + " errorCode=" + ex.getErrorCode());
         json(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                 Map.of("error", "database operation failed", "detail", ex.getMessage()));
     }
