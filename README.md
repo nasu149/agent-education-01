@@ -73,6 +73,9 @@ START -> starter -> END
 
 受講者はコード内の `TODO 1〜5` を進めます。
 
+**TODO コメントは問題文です。基本的に消さず、その直下へ実装を書いてください。**
+講師用 solution branch も同じ TODO コメントを残したまま、直下へ模範解答を書いています。
+
 主な実装対象:
 
 1. 調査 Prompt の設計
@@ -154,10 +157,29 @@ Docker研修までは把握しているが、AI Agent ハンズオン案は初�
 Linux / Oracle Linux を想定:
 
 ```bash
-export GEMINI_API_KEY='YOUR_KEY'
+cp .env.example .env
+# .env を編集して GEMINI_API_KEY などを設定
 chmod +x scripts/*.sh
 ./scripts/pure_docker_up.sh
 ```
+
+`pure_docker_up.sh` と `battle_start_agent.sh` はリポジトリ直下の `.env` を読み込みます。
+Docker Compose 利用時も同じ `.env` が使われます。
+
+主な設定:
+
+```dotenv
+HEALTH_CHECK_INTERVAL_SECONDS=5
+MONITOR_STARTUP_GRACE_SECONDS=20
+FAILURE_THRESHOLD=2
+GEMINI_TIMEOUT_SECONDS=90
+```
+
+起動ログにも実際に採用された値が表示されます。
+
+なお、Agent Dashboard は画面更新のため `GET /api/status` を約1.5秒ごとに呼びます。
+これはヘルスチェックではありません。実際のヘルスチェックは
+`HEALTH_CHECK_INTERVAL_SECONDS` ごとの `GET /api/members` です。
 
 確認:
 
