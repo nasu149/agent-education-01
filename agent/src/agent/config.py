@@ -28,6 +28,7 @@ class Settings:
 
     gemini_api_key: str
     gemini_model: str
+    gemini_timeout_seconds: float
     app_base_url: str
     target_compose_project: str
     target_services: tuple[str, ...]
@@ -68,6 +69,7 @@ class Settings:
         return cls(
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            gemini_timeout_seconds=float(os.getenv("GEMINI_TIMEOUT_SECONDS", "90")),
             app_base_url=os.getenv("APP_BASE_URL", "http://httpd").rstrip("/"),
             target_compose_project=os.getenv("TARGET_COMPOSE_PROJECT", "agent-education"),
             target_services=services,
