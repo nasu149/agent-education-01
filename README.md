@@ -567,6 +567,26 @@ Tool接続の標準化      -> MCP
 
 完成版の意図は [`docs/SOLUTION_GUIDE.md`](docs/SOLUTION_GUIDE.md) にもまとめています。
 
+## 名簿アプリの動作確認とログ
+
+Node.js 18 以降がある場合、画面の回帰テストと起動済みアプリの API テストを実行できます。
+
+```powershell
+node --test httpd/tests/member-form.test.cjs scripts/test_member_api.cjs
+```
+
+API テストは `http://localhost:8088` に対して、日本語の登録・検索・更新・削除、必須項目、不正な JSON / ID を確認します。専用のテストレコードを作成し、終了時に削除します。接続先を変更する場合は `MEMBER_APP_URL` を設定してください。画面のテストだけなら `node --test httpd/tests/member-form.test.cjs` で実行できます。
+
+pure Docker 環境では、Tomcat の診断ログを次で確認できます。
+
+```powershell
+docker logs -f agent-education-tomcat
+```
+
+各リクエストの `requestId`、HTTP メソッド、パス、Content-Type、ステータス、処理時間を記録します。登録・更新時には必須項目の状態（`present` / `missing_or_null` / `blank` / `invalid_type`）も記録し、氏名・部署・メールアドレスの値は記録しません。レスポンスの `X-Request-ID` と画面のエラー表示・ブラウザーコンソールの `requestId` で対応するログを探せます。
+
+氏名欄の取得には `document.getElementById('name').value` を使います。`name.value` と書くとブラウザー標準の `window.name` と衝突し、入力済みでも送信 JSON から `name` が抜けるためです。
+
 ## CI
 
 GitHub Actionsで以下を確認します。
