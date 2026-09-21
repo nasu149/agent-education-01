@@ -96,8 +96,11 @@ async function refresh() {
   const s = await r.json();
   const klass = s.healthy ? "ok" : "ng";
   const label = s.healthy ? "HEALTHY" : "UNHEALTHY";
+  const monitoring = s.monitoring || {};
   document.getElementById("health").innerHTML =
-    `<span class="badge ${klass}">${label}</span> HTTP ${s.last_http_status ?? "-"}`;
+    `<span class="badge ${klass}">${label}</span> HTTP ${s.last_http_status ?? "-"}` +
+    `<div class="small">Health check: every ${esc(monitoring.health_check_interval_seconds ?? "-")}s / failure threshold ${esc(monitoring.failure_threshold ?? "-")}</div>` +
+    `<div class="small">Dashboard refresh: ${DASHBOARD_REFRESH_MS / 1000}s（表示更新のみ）</div>`;
   document.getElementById("incident").textContent = s.active_incident_id
     ? `Incident: ${s.active_incident_id} / current node: ${s.current_node}`
     : `Active incident: none / last node: ${s.current_node}`;
