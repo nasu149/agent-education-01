@@ -2,6 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# docker compose reads .env automatically, but plain docker scripts do not.
+# Load the same .env here so both startup methods use the same settings.
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 NETWORK="agent-education-net"
 VOLUME="agent-education-postgres-data"
 POSTGRES_CONTAINER="agent-education-postgres"
@@ -20,8 +30,17 @@ if [[ "$GEMINI_MODEL" == "gemini-2.5-flash-lite" ]]; then
   echo "WARNING: GEMINI_MODEL=gemini-2.5-flash-lite is no longer available to new users; using gemini-3.5-flash-lite instead." >&2
   GEMINI_MODEL="gemini-3.5-flash-lite"
 fi
+GEMINI_TIMEOUT_SECONDS="${GEMINI_TIMEOUT_SECONDS:-90}"
 LANGGRAPH_PRINT_MODE="${LANGGRAPH_PRINT_MODE:-updates}"
+HEALTH_CHECK_INTERVAL_SECONDS="${HEALTH_CHECK_INTERVAL_SECONDS:-5}"
+MONITOR_STARTUP_GRACE_SECONDS="${MONITOR_STARTUP_GRACE_SECONDS:-20}"
+FAILURE_THRESHOLD="${FAILURE_THRESHOLD:-2}"
+MAX_INVESTIGATION_TOOL_RESULTS="${MAX_INVESTIGATION_TOOL_RESULTS:-8}"
+VERIFY_RETRY_LIMIT="${VERIFY_RETRY_LIMIT:-1}"
+
 echo "==> Gemini model: $GEMINI_MODEL"
+echo "==> Gemini timeout: ${GEMINI_TIMEOUT_SECONDS}s"
+echo "==> Health check: every ${HEALTH_CHECK_INTERVAL_SECONDS}s, startup grace ${MONITOR_STARTUP_GRACE_SECONDS}s, failure threshold ${FAILURE_THRESHOLD}"
 echo "==> LangGraph console print mode: $LANGGRAPH_PRINT_MODE"
 
 cd "$ROOT_DIR"
@@ -100,6 +119,7 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
   -e GEMINI_MODEL="$GEMINI_MODEL" \
+  -e GEMINI_TIMEOUT_SECONDS="$GEMINI_TIMEOUT_SECONDS" \
   -e LANGGRAPH_PRINT_MODE="$LANGGRAPH_PRINT_MODE" \
   -e APP_BASE_URL=http://httpd \
   -e TARGET_SERVICES=httpd,tomcat,postgres \
@@ -113,11 +133,11 @@ docker run -d \
   -e DB_ADMIN_PASSWORD=postgres \
   -e TERMINABLE_DB_APPLICATIONS=fault-injector \
   -e FAULT_DB_USER=fault_injector \
-  -e HEALTH_CHECK_INTERVAL_SECONDS="${HEALTH_CHECK_INTERVAL_SECONDS:-5}" \
-  -e MONITOR_STARTUP_GRACE_SECONDS="${MONITOR_STARTUP_GRACE_SECONDS:-20}" \
-  -e FAILURE_THRESHOLD="${FAILURE_THRESHOLD:-2}" \
-  -e MAX_INVESTIGATION_TOOL_RESULTS="${MAX_INVESTIGATION_TOOL_RESULTS:-8}" \
-  -e VERIFY_RETRY_LIMIT="${VERIFY_RETRY_LIMIT:-1}" \
+  -e HEALTH_CHECK_INTERVAL_SECONDS="$HEALTH_CHECK_INTERVAL_SECONDS" \
+  -e MONITOR_STARTUP_GRACE_SECONDS="$MONITOR_STARTUP_GRACE_SECONDS" \
+  -e FAILURE_THRESHOLD="$FAILURE_THRESHOLD" \
+  -e MAX_INVESTIGATION_TOOL_RESULTS="$MAX_INVESTIGATION_TOOL_RESULTS" \
+  -e VERIFY_RETRY_LIMIT="$VERIFY_RETRY_LIMIT" \
   -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
   agent-education-agent \
   >/dev/null
