@@ -127,5 +127,7 @@ async function approve(value) {
   });
   await refresh();
 }
-setInterval(refresh, 1500);
+// Dashboard refresh only. This polls /api/status and is NOT the Agent health check.
+const DASHBOARD_REFRESH_MS = 1500;
+setInterval(refresh, DASHBOARD_REFRESH_MS);
 refresh();
