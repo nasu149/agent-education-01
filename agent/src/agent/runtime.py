@@ -334,6 +334,11 @@ class AgentRuntime:
         return {
             "healthy": self.healthy,
             "last_http_status": self.last_http_status,
+            "monitoring": {
+                "health_check_interval_seconds": self.settings.health_check_interval_seconds,
+                "startup_grace_seconds": self.settings.monitor_startup_grace_seconds,
+                "failure_threshold": self.settings.failure_threshold,
+            },
             "active_incident_id": self.active_incident_id,
             "pending_approval": self.pending_approval,
             "last_report": self.last_report,
