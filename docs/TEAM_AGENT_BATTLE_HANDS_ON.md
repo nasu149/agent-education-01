@@ -88,6 +88,20 @@ START -> starter -> END
 
 `agent/src/agent/graph.py` の TODO 1〜5 を探してください。
 
+### TODOコメントは消さない
+
+この研修では TODO コメントそのものを「問題文」として使います。
+
+```python
+# TODO 2: investigate を実装する
+# ...
+async def investigate(...):
+    ...
+```
+
+コメントは基本的に残したまま、その直下の未実装部分を書き換えてください。
+講師用の模範解答も、同じ TODO コメントを残した構成になっています。
+
 ---
 
 ## Step 1: Tool を確認
