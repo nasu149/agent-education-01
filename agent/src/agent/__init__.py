@@ -1,1 +1,6 @@
-"""Training Agent package."""
+"""一次障害対応を題材に、監視・LLM による調査・人間の承認を学ぶパッケージ。
+
+入口は api.py。runtime.py が定期監視と障害対応の実行を管理し、graph.py が
+調査から報告までの手順を定義する。mcp_tools.py は外部操作の窓口となる。
+設定は config.py、受け渡すデータの型は models.py、研修画面は static/index.html を参照する。
+"""

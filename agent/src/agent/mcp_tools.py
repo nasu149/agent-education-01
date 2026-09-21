@@ -1,4 +1,8 @@
-"""Load MCP tools and separate observation capabilities from mutation capabilities."""
+"""MCP サーバーからツールを取得し、観測用と状態変更用に分ける。
+
+LLM には観測用だけを渡し、状態変更用は人間の承認後に決められた処理から呼び出す。
+プロンプトによる注意書きだけに頼らず、渡すツール自体を分けることで権限を限定する。
+"""
 
 from __future__ import annotations
 
@@ -17,25 +21,37 @@ READ_ONLY_TOOL_NAMES = {
     "inspect_container",
     "get_container_logs",
     "read_config",
+    "get_postgres_connection_summary",
 }
-MUTATING_TOOL_NAMES = {"start_container", "restart_container"}
+MUTATING_TOOL_NAMES = {
+    "start_container",
+    "restart_container",
+    "terminate_postgres_connections",
+}
 
 
 @dataclass
 class ToolCatalog:
-    """Tool sets with an explicit privilege boundary."""
+    """用途と権限に応じて分類した、MCP ツールの受け渡し用データ。
+
+    read_only は LLM が選択できる観測ツールのリスト。
+    mutating はツール名をキーにした復旧ツールの辞書で、承認後の remediate ノードが
+    使用する。このクラス自体が承認を判定するのではなく、呼び出し元が分離を守る。
+    """
 
     read_only: list[BaseTool]
     mutating: dict[str, BaseTool]
 
 
 def _mcp_subprocess_environment() -> tuple[str, dict[str, str]]:
-    """Return a stable working directory and environment for the stdio server.
+    """MCP サーバーの子プロセスに渡す作業ディレクトリと環境変数を返す。
 
-    `MultiServerMCPClient` launches the MCP server in a child process. Relying on
-    a relative ``PYTHONPATH`` makes startup depend on the caller's current
-    directory, which is fragile in CI and IDEs. Derive the absolute ``src`` path
-    from this module so the subprocess can always import ``mcp_server``.
+    戻り値は (src の絶対パス, 環境変数の辞書) の組。
+    このファイルの位置から src を求め、コピーした環境変数の PYTHONPATH の先頭に
+    追加する。既存の PYTHONPATH は残し、親プロセスの環境変数は変更しない。
+
+    相対パスだけに頼ると IDE や CI の起動場所によって mcp_server を import できなく
+    なるため、子プロセスの作業場所と検索パスを明示的にそろえる。
     """
 
     src_root = Path(__file__).resolve().parents[1]
@@ -50,10 +66,15 @@ def _mcp_subprocess_environment() -> tuple[str, dict[str, str]]:
 
 
 async def load_tool_catalog() -> ToolCatalog:
-    """Load tools from the local MCP server over stdio.
+    """ローカルの MCP サーバーからツール定義を取得し、分類した ToolCatalog を返す。
 
-    The LLM only receives ``read_only``. Mutation tools remain available to the
-    deterministic remediation node, which is reachable only after approval.
+    現在の Python 実行環境で mcp_server.server を子プロセスとして起動し、
+    stdio（標準入出力）でツール名・説明・引数の定義を取得する。
+    必要なツール名がすべてそろっているか確認し、不足があれば RuntimeError にする。
+
+    READ_ONLY_TOOL_NAMES のツールは名前順のリスト、MUTATING_TOOL_NAMES のツールは
+    名前で引ける辞書にする。リストにない未知のツールは戻り値に含めない。
+    取得した観測ツールだけを LLM に公開し、復旧ツールは承認後の処理に限定する。
     """
 
     cwd, env = _mcp_subprocess_environment()
