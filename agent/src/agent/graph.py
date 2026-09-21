@@ -6,6 +6,8 @@ Docker / MCP Server / Tool 実装 / 監視 / Dashboard は講師側で準備済�
 開始時点では安全な placeholder graph が動く。
 受講者は TODO 1〜4 を実装し、最後に TODO 5 で本番 graph へ配線する。
 
+TODO コメントは「問題文」なので、基本的に削除せず、その直下へ実装を書く。
+
 競技では各チームが同じ MCP Tool・同じ Gemini model・同じ障害条件を使う。
 差を出してよいのは Prompt、調査戦略、State の追加項目、routing、
 レポートの見せ方など。ただし mutation Tool の安全境界は変更しない。
@@ -81,7 +83,11 @@ Browser -> httpd -> Tomcat -> PostgreSQL.
 
 Investigate the incident using only the read-only tools provided to you.
 Prefer observed evidence over guesses.
-Choose the next observation based on the results already collected.
+Start broad, then choose the next observation based on the results already collected.
+Correlate multiple observations before concluding when possible.
+If application logs suggest a database connection problem while PostgreSQL is
+still running, inspect PostgreSQL connection state instead of assuming the DB
+process itself is down.
 When enough evidence exists to diagnose the incident, stop calling tools and
 summarize the investigation briefly.
 """
@@ -97,6 +103,12 @@ Choose one recommended_action:
 - terminate_postgres_connections
 - manual
 - none
+
+Choose start_container only when a target container is observed stopped/exited.
+Choose restart_container only when a running service clearly needs a restart.
+Choose terminate_postgres_connections only when the observations show abnormal
+PostgreSQL sessions from a specific application_name.
+For terminate_postgres_connections, use the exact observed application_name.
 
 Use manual when the repair requires a configuration change, credential repair,
 or another action outside the allowed mutation tools.
@@ -132,7 +144,7 @@ def build_graph(
         api_key=settings.gemini_api_key,
         temperature=0.1,
         max_retries=2,
-        timeout=40,
+        timeout=settings.gemini_timeout_seconds,
     )
 
     # LLM に渡してよいのは read-only Tool だけ。
@@ -168,9 +180,10 @@ def build_graph(
         実装の目安は 5〜15 行程度。
 
         やること:
-        1. SystemMessage + state["messages"] を LLM へ渡す
-        2. investigator_llm.ainvoke(...) を呼ぶ
-        3. response を {"messages": [response]} で返す
+        1. emit_state("investigate", state) で現在Stateを画面に出す
+        2. SystemMessage + state["messages"] を LLM へ渡す
+        3. investigator_llm.ainvoke(...) を呼ぶ
+        4. response を {"messages": [response]} で返す
 
         発展:
         - Tool 回数上限に近づいたら結論を促す
@@ -215,9 +228,10 @@ def build_graph(
         実装の目安は 5〜15 行程度。
 
         やること:
-        1. JUDGE_SYSTEM_PROMPT と state["messages"] をまとめる
-        2. diagnosis_llm.ainvoke(...) を呼ぶ
-        3. {"diagnosis": diagnosis, "investigation_tool_results": 0} を返す
+        1. emit_state("judge", state) で現在Stateを画面に出す
+        2. JUDGE_SYSTEM_PROMPT と state["messages"] をまとめる
+        3. diagnosis_llm.ainvoke(...) を呼ぶ
+        4. {"diagnosis": diagnosis, "investigation_tool_results": 0} を返す
 
         ポイント:
         「調査」と「判断」を Node として分けることで、
@@ -248,10 +262,11 @@ def build_graph(
         実装の目安は 10〜20 行程度。
 
         やること:
-        1. state["diagnosis"] を取得
-        2. ApprovalRequest を作成して model_dump()
-        3. approved = interrupt(payload)
-        4. approved / rejected を State に返す
+        1. emit_state("approval", state) で現在Stateを画面に出す
+        2. state["diagnosis"] を取得
+        3. ApprovalRequest を作成して model_dump()
+        4. approved = interrupt(payload)
+        5. approved / rejected を State に返す
 
         安全ルール:
         - interrupt() より前に mutation Tool を実行しない
