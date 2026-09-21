@@ -1,4 +1,9 @@
-"""Environment-backed configuration for the training Agent."""
+"""環境変数から、研修用 Agent の動作設定を組み立てる。
+
+監視間隔や調査回数の上限をコードから分離し、実行環境に合わせて変更できるようにする。
+このモジュール自身は .env ファイルを読まず、起動スクリプトや Docker Compose が
+プロセスに渡した環境変数を参照する。
+"""
 
 from __future__ import annotations
 
@@ -11,10 +16,14 @@ _LANGGRAPH_PRINT_MODES = {"off", "updates", "values", "debug"}
 
 @dataclass(frozen=True)
 class Settings:
-    """Runtime configuration.
+    """Agent の起動時に確定する設定をまとめた、変更不可のデータクラス。
 
-    Defaults favor a classroom laptop: short monitoring intervals, local Docker,
-    and the Gemini Developer API. Every value can be overridden from `.env`.
+    Gemini の接続情報、監視先 URL、監視間隔、連続失敗のしきい値、調査・復旧確認の
+    上限、ログ出力方法を保持する。frozen=True により、生成後のフィールドへの
+    再代入を防ぐ。各処理にはこのオブジェクトを渡し、同じ設定を共有する。
+
+    通常は from_env() で生成する。既定値は研修用のローカル Docker 環境を想定する。
+    gemini_api_key には秘密情報が入るため、設定全体をそのままログに出さないこと。
     """
 
     gemini_api_key: str
@@ -32,6 +41,16 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        """プロセスの環境変数を読み、型を変換して Settings を返す。
+
+        TARGET_SERVICES はカンマ区切りの文字列から空要素を除いたタプルにする。
+        時間は float、回数は int に変換し、APP_BASE_URL 末尾の '/' を取り除く。
+        未設定の変数には、このメソッド内で定めた既定値を使う。
+
+        LANGGRAPH_PRINT_MODE は小文字にそろえ、空文字・none・false・0 を off として
+        扱う。許可したモード以外の値や、数値に変換できない設定値は ValueError になる。
+        .env の読み込みや、数値の大小・API キーの有効性の検証はここでは行わない。
+        """
         services = tuple(
             item.strip()
             for item in os.getenv("TARGET_SERVICES", "httpd,tomcat,postgres").split(",")

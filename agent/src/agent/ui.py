@@ -1,4 +1,9 @@
-"""Small dependency-free training dashboard served by FastAPI."""
+"""Agent の監視・調査・承認・報告を可視化する、研修用ダッシュボード。
+
+PAGE に HTML・CSS・JavaScript をまとめ、api.py から配信する。
+別のフロントエンド用フレームワークは使わず、ブラウザーから状態取得 API を呼び出して
+画面を更新する。承認・却下のボタンは人間の判断を API に送り、Graph の再開につなぐ。
+"""
 
 PAGE = r"""<!doctype html>
 <html lang="ja">

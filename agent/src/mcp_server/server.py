@@ -1,8 +1,8 @@
-"""MCP server exposing deliberately constrained operations tools.
+"""操作範囲を限定した、運用研修用のツールを公開する MCP サーバー。
 
-The tools are low-level enough that the LLM must investigate, but constrained
-enough to be safe and understandable in a classroom. The server never exposes a
-generic shell, arbitrary file-read capability, or arbitrary SQL execution.
+LLM が観測結果を組み合わせて原因を調査できるよう、個々のツールは基本的な
+操作に分けている。一方で、授業で安全に扱い、動作を理解できるように対象を
+限定する。汎用シェル、任意のファイルの読み取り、任意の SQL 実行は公開しない。
 """
 
 from __future__ import annotations
@@ -59,16 +59,16 @@ TERMINABLE_DB_APPLICATIONS = {
 
 
 def _client():
-    """Create a Docker SDK client through the mounted local Docker socket."""
+    """マウントされたローカルの Docker ソケットに接続する SDK クライアントを作成する。"""
     return docker.from_env()
 
 
 def _container_for_service(service: str):
-    """Resolve one allow-listed service for Compose or plain ``docker run``.
+    """許可されたサービスに対応するコンテナを、Compose または通常の Docker 環境で探す。
 
-    Compose containers are discovered by labels. For the real training flow,
-    where trainees use plain Docker commands, the MCP server falls back to an
-    explicitly configured container name.
+    まず Compose のプロジェクト名とサービス名のラベルで検索する。
+    見つからなければ、研修で使う ``docker run`` 環境にも対応するため、
+    明示的に設定されたコンテナ名で検索する。
     """
     if service not in ALLOWED_SERVICES:
         raise ValueError(f"service must be one of {sorted(ALLOWED_SERVICES)}")
@@ -99,12 +99,11 @@ def _container_for_service(service: str):
 
 
 def _postgres_connection():
-    """Open the private management connection used only by fixed MCP operations.
+    """MCP に実装した固定の操作だけに使う、非公開の管理用 DB 接続を開く。
 
-    The demo intentionally uses the PostgreSQL superuser here so this connection
-    can use PostgreSQL's superuser-reserved slots after normal application slots
-    are exhausted. The LLM never receives these credentials and never receives
-    an arbitrary SQL tool.
+    この教材では、通常のアプリ用接続枠が枯渇してもスーパーユーザー用の
+    予約枠で接続できるよう、意図的に PostgreSQL のスーパーユーザーを使う。
+    この認証情報は LLM に渡さず、任意の SQL を実行するツールも公開しない。
     """
     return psycopg.connect(
         host=DB_ADMIN_HOST,
@@ -121,10 +120,12 @@ def _postgres_connection():
 
 @mcp.tool()
 async def http_request(path: str = "/api/members", method: str = "GET") -> dict[str, Any]:
-    """Call the training web application and return status plus a short body.
+    """研修用 Web アプリにアクセスし、HTTP ステータスとレスポンス本文の先頭を返す。
 
-    Use this to observe the application from the same network as the Agent.
-    Only GET is allowed because this is an observation tool.
+    Agent と同じネットワークから、アプリが正常に応答するか確認するときに使う。
+    path は '/' で始まるアプリ内のパスを指定する（既定値: '/api/members'）。
+    観測専用のため method は GET のみ許可し、本文は最大 2000 文字を返す。
+    通信に失敗した場合は、エラーの種類と詳細を返す。
     """
     if method.upper() != "GET":
         raise ValueError("observation tool only permits GET")
@@ -146,7 +147,11 @@ async def http_request(path: str = "/api/members", method: str = "GET") -> dict[
 
 @mcp.tool()
 def list_containers() -> list[dict[str, Any]]:
-    """List status for the httpd, tomcat and postgres services only."""
+    """許可されたサービスのコンテナ名、稼働状態、イメージを一覧で返す。
+
+    障害調査の初めに、停止中または見つからないコンテナがないか確認するときに使う。
+    対象は TARGET_SERVICES で許可したサービスのみ（既定値: httpd, tomcat, postgres）。
+    """
     LOGGER.info("list_containers project=%s", PROJECT)
     results: list[dict[str, Any]] = []
     for service in sorted(ALLOWED_SERVICES):
@@ -167,7 +172,12 @@ def list_containers() -> list[dict[str, Any]]:
 
 @mcp.tool()
 def inspect_container(service: str) -> dict[str, Any]:
-    """Inspect one allowed service and return operationally useful metadata."""
+    """許可されたサービスを 1 つ指定し、コンテナの稼働状態や接続設定を詳しく確認する。
+
+    service にサービス名を指定する（既定の許可対象: httpd, tomcat, postgres）。
+    稼働状態、ヘルスチェック、ポート、ネットワーク、IP アドレス、別名を返す。
+    環境変数は DB_HOST, DB_PORT, DB_NAME, DB_USER のみを返し、パスワードは返さない。
+    """
     LOGGER.info("inspect_container service=%s", service)
     container = _container_for_service(service)
     container.reload()
@@ -195,9 +205,11 @@ def inspect_container(service: str) -> dict[str, Any]:
 
 @mcp.tool()
 def get_container_logs(service: str, tail: int = 80) -> str:
-    """Return recent logs for one allowed service.
+    """許可されたサービスの直近ログを取得し、エラーや障害の手掛かりを確認する。
 
-    `tail` is clamped to 200 so a model cannot accidentally flood its context.
+    service にサービス名を指定する（既定の許可対象: httpd, tomcat, postgres）。
+    tail は末尾から取得する行数で、既定値は 80。LLM に大量のログを渡さないよう、
+    実際の取得行数は 1〜200 行に制限する。ログにはタイムスタンプを付ける。
     """
     safe_tail = max(1, min(int(tail), 200))
     LOGGER.info("get_container_logs service=%s tail=%s", service, safe_tail)
@@ -207,10 +219,12 @@ def get_container_logs(service: str, tail: int = 80) -> str:
 
 @mcp.tool()
 def read_config(config_name: str) -> dict[str, Any]:
-    """Read one whitelisted configuration view.
+    """許可された設定を 1 つ読み取り、プロキシや DB 接続先の設定を確認する。
 
-    Allowed names are `httpd_proxy` and `tomcat_database`. There is deliberately
-    no arbitrary `read_file(path)` tool.
+    config_name は httpd_proxy または tomcat_database のみ指定できる。
+    httpd_proxy は httpd のプロキシ設定ファイル、tomcat_database は Tomcat の
+    DB_HOST, DB_PORT, DB_NAME, DB_USER を返す。DB パスワードは返さない。
+    任意のパスを読み取る read_file(path) のような機能は公開しない。
     """
     if config_name not in CONFIG_TARGETS:
         raise ValueError(f"config_name must be one of {sorted(CONFIG_TARGETS)}")
@@ -244,12 +258,13 @@ def read_config(config_name: str) -> dict[str, Any]:
 
 @mcp.tool()
 def get_postgres_connection_summary() -> dict[str, Any]:
-    """Run fixed read-only SELECTs that summarize PostgreSQL connection usage.
+    """固定の読み取り専用 SELECT を実行し、PostgreSQL の接続数と使用状況を調べる。
 
-    This is intentionally *not* an arbitrary SQL tool. The SQL text is defined
-    in the MCP implementation and cannot be supplied by the model. It returns
-    max_connections, superuser-reserved slots, and pg_stat_activity grouped by
-    database user, application_name, client address and state.
+    DB 接続の枯渇が疑われるときに、接続上限と接続元ごとの使用数を確認する。
+    max_connections、スーパーユーザー予約枠、通常接続枠、および
+    pg_stat_activity を DB 名、ユーザー、application_name、接続元アドレス、
+    状態で集計した結果を返す。この MCP 管理接続自身は集計から除外する。
+    SQL は実装内に固定されており、LLM から任意の SQL は指定できない。
     """
     LOGGER.info("get_postgres_connection_summary")
     with _postgres_connection() as conn:
@@ -297,7 +312,12 @@ def get_postgres_connection_summary() -> dict[str, Any]:
 
 @mcp.tool()
 def start_container(service: str) -> dict[str, str]:
-    """Start one allowed service after the Graph has obtained human approval."""
+    """Graph が人間の承認を得た後、許可されたサービスのコンテナを 1 つ起動する。
+
+    service に起動するサービス名を指定する（既定の許可対象: httpd, tomcat, postgres）。
+    状態を変更する復旧操作であり、観測用ではない。起動後の稼働状態を返す。
+    承認の確認は呼び出し元の Graph が行う。
+    """
     LOGGER.warning("MUTATION start_container service=%s", service)
     container = _container_for_service(service)
     container.start()
@@ -307,7 +327,12 @@ def start_container(service: str) -> dict[str, str]:
 
 @mcp.tool()
 def restart_container(service: str) -> dict[str, str]:
-    """Restart one allowed service after a human-approved remediation decision."""
+    """人間が復旧方針を承認した後、許可されたサービスのコンテナを 1 つ再起動する。
+
+    service に再起動するサービス名を指定する（既定の許可対象: httpd, tomcat, postgres）。
+    状態を変更する復旧操作であり、観測用ではない。再起動後の稼働状態を返す。
+    承認の確認は呼び出し元の Graph が行う。
+    """
     LOGGER.warning("MUTATION restart_container service=%s", service)
     container = _container_for_service(service)
     container.restart(timeout=10)
@@ -317,13 +342,15 @@ def restart_container(service: str) -> dict[str, str]:
 
 @mcp.tool()
 def terminate_postgres_connections(application_name: str) -> dict[str, Any]:
-    """Terminate only explicitly allow-listed PostgreSQL client sessions.
+    """明示的に許可された PostgreSQL のクライアント接続だけを切断する。
 
-    This mutation is intended for the Human-in-the-loop remediation node. The
-    caller may choose only an application_name from TERMINABLE_DB_APPLICATIONS;
-    the SQL itself is fixed and parameterized. The training default allows only
-    `fault-injector`, and the query additionally requires the dedicated
-    `fault_injector` database role.
+    接続枯渇からの復旧に使う状態変更操作で、人間の承認を経た復旧ノードから呼び出す。
+    承認の確認は呼び出し元の Graph が行う。
+    application_name は TERMINABLE_DB_APPLICATIONS の許可リストからのみ選択できる。
+    教材の既定値は fault-injector のみで、さらに DB ユーザーが専用の
+    fault_injector（FAULT_DB_USER）に一致する接続に限定する。管理接続自身は除外する。
+    SQL は固定され、引数はパラメーターとして渡す。対象件数、切断成功件数、
+    切断した PID と切断に失敗した PID を返す。
     """
     if application_name not in TERMINABLE_DB_APPLICATIONS:
         raise ValueError(
