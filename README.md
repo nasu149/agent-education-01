@@ -282,16 +282,44 @@ Round 3: proxy-port
 
 前日の Docker 研修終了後などに、講師側で Tomcat だけを作り直します。
 
+Linux / Oracle Linux:
+
 ~~~bash
 ./scripts/prepare_disk_full_training.sh
+~~~
+
+Windows PowerShell:
+
+~~~powershell
+.\scripts\prepare_disk_full_training.ps1
 ~~~
 
 これにより Tomcat に容量16MBの `/training-disk` が付きます。
 
 障害注入:
 
+Linux / Oracle Linux:
+
 ~~~bash
 ./scripts/battle_inject_fault.sh disk-full
+~~~
+
+Windows PowerShell:
+
+~~~powershell
+.\scripts\battle_inject_fault.ps1 disk-full
+~~~
+
+PowerShell で直接注入する場合:
+
+~~~powershell
+.\scripts\inject_disk_full.ps1
+~~~
+
+PowerShell で Battle 環境を戻す場合:
+
+~~~powershell
+.\scripts\battle_reset.ps1
 ~~~
 
 Agent が利用する追加 Tool:
