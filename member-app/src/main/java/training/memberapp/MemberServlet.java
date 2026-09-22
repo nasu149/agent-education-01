@@ -9,6 +9,10 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -28,6 +32,7 @@ import java.util.logging.Logger;
  */
 public class MemberServlet extends HttpServlet {
     private static final Logger LOGGER = Logger.getLogger(MemberServlet.class.getName());
+    private static final String AUDIT_LOG_PATH = env("AUDIT_LOG_PATH", "");
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -38,6 +43,24 @@ public class MemberServlet extends HttpServlet {
         response.setHeader("X-Request-ID", requestId);
         long started = System.nanoTime();
         try {
+            if (!AUDIT_LOG_PATH.isBlank()) {
+                try {
+                    appendAuditRecord(requestId, request);
+                } catch (IOException ex) {
+                    LOGGER.severe("requestId=" + requestId
+                            + " audit_write_failed path=" + logValue(AUDIT_LOG_PATH)
+                            + " reason=" + logValue(ex.getMessage()));
+                    json(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                            Map.of(
+                                    "error", "audit storage unavailable",
+                                    "detail", ex.getMessage() == null
+                                            ? ex.getClass().getSimpleName()
+                                            : ex.getMessage()
+                            ));
+                    return;
+                }
+            }
+
             super.service(request, response);
         } catch (JsonProcessingException ex) {
             LOGGER.warning("requestId=" + requestId + " invalid_json");
@@ -58,6 +81,28 @@ public class MemberServlet extends HttpServlet {
                     + " status=" + response.getStatus()
                     + " durationMs=" + (System.nanoTime() - started) / 1_000_000);
         }
+    }
+
+    private void appendAuditRecord(String requestId, HttpServletRequest request) throws IOException {
+        Path path = Path.of(AUDIT_LOG_PATH);
+        Path parent = path.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
+        String record = "requestId=" + requestId
+                + " method=" + logValue(request.getMethod())
+                + " path=" + logValue(request.getRequestURI())
+                + System.lineSeparator();
+
+        Files.writeString(
+                path,
+                record,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.APPEND
+        );
     }
 
     private String logValue(String value) {
@@ -217,6 +262,11 @@ public class MemberServlet extends HttpServlet {
                 + " errorCode=" + ex.getErrorCode());
         json(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                 Map.of("error", "database operation failed", "detail", ex.getMessage()));
+    }
+
+    private static String env(String key, String defaultValue) {
+        String value = System.getenv(key);
+        return value == null || value.isBlank() ? defaultValue : value;
     }
 
     private void json(HttpServletResponse response, int status, Object value) throws IOException {
