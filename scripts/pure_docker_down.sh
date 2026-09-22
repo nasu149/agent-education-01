@@ -5,6 +5,7 @@ NETWORK="agent-education-net"
 VOLUME="agent-education-postgres-data"
 
 for container in \
+  agent-education-lock-injector \
   agent-education-fault-injector \
   agent-education-agent \
   agent-education-httpd \
