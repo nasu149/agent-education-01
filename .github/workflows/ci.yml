@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution"]
+    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution", "training/db-disk-full", "training/db-disk-full-solution"]
   pull_request:
 
 jobs:
@@ -221,3 +221,116 @@ jobs:
             sleep 1
           done
           test "$recovered" -eq 1
+
+
+  db-disk-full-infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+
+      - name: Start unchanged application with PostgreSQL training storage
+        run: docker compose up -d --build postgres tomcat httpd
+
+      - name: Verify read/write split during DB disk-full
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            code=$?
+            trap - EXIT
+            if [ "$code" -ne 0 ]; then
+              echo "===== compose ps ====="
+              docker compose ps || true
+              echo "===== training disk ====="
+              docker compose exec -T postgres df -h /training-disk || true
+              echo "===== training disk files ====="
+              docker compose exec -T postgres sh -c 'du -ak /training-disk 2>/dev/null | sort -nr | head -20' || true
+              echo "===== postgres logs ====="
+              docker compose logs --no-color postgres || true
+              echo "===== tomcat logs ====="
+              docker compose logs --no-color tomcat || true
+            fi
+            docker compose down -v --remove-orphans || true
+            exit "$code"
+          }
+          trap cleanup EXIT
+
+          echo "Waiting for unchanged CRUD application..."
+          for _ in $(seq 1 40); do
+            if curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null
+
+          echo "Verifying normal write path before fault..."
+          curl -fsS             -X POST             -H 'Content-Type: application/json'             -d '{"name":"Before Fault","department":"training","email":"before-db-disk-full@example.local"}'             http://localhost:8088/api/members > /tmp/before-create.json
+          before_id=$(python -c 'import json; print(json.load(open("/tmp/before-create.json"))["id"])')
+          curl -fsS -X DELETE "http://localhost:8088/api/members/$before_id" >/dev/null
+
+          echo "Confirming training tablespace is present..."
+          docker compose exec -T postgres psql -U postgres -d memberdb -Atc             "select spcname from pg_tablespace where spcname='training_disk_ts';"             | grep -qx training_disk_ts
+
+          echo "Emptying audit relation so the next INSERT must allocate storage..."
+          docker compose exec -T postgres psql -U postgres -d memberdb -c             "TRUNCATE training_write_audit;" >/dev/null
+
+          echo "Filling the shared training filesystem with a simulated overnight export..."
+          docker compose exec -T postgres sh -c '
+            mkdir -p /training-disk/archive
+            rm -f /training-disk/archive/training-overnight-export.bin
+            dd if=/dev/zero of=/training-disk/archive/training-overnight-export.bin bs=1M count=128 status=none 2>/dev/null || true
+            dd if=/dev/zero of=/training-disk/archive/training-overnight-export.bin bs=1K count=4096 oflag=append conv=notrunc status=none 2>/dev/null || true
+            dd if=/dev/zero of=/training-disk/archive/training-overnight-export.bin bs=1 count=16384 oflag=append conv=notrunc status=none 2>/dev/null || true
+          '
+
+          use_percent=$(docker compose exec -T postgres df -Pk /training-disk | awk 'NR==2 {gsub(/%/, "", $5); print $5}')
+          echo "training DB disk use_percent=$use_percent"
+          test "$use_percent" -ge 95
+
+          echo "Read path must remain healthy..."
+          curl -fsS --max-time 5 http://localhost:8088/api/members >/dev/null
+
+          echo "Existing POST write path must now fail..."
+          status=$(curl -sS --max-time 5 -o /tmp/write-failure.json -w '%{http_code}'             -X POST             -H 'Content-Type: application/json'             -d '{"name":"Disk Full","department":"training","email":"during-db-disk-full@example.local"}'             http://localhost:8088/api/members || true)
+          echo "POST status=$status"
+          cat /tmp/write-failure.json || true
+          test "$status" = "500"
+          grep -q 'database operation failed' /tmp/write-failure.json
+
+          echo "The failed transaction must not leave the synthetic member behind..."
+          remaining=$(docker compose exec -T postgres psql -U postgres -d memberdb -Atc             "select count(*) from members where email='during-db-disk-full@example.local';")
+          test "$remaining" -eq 0
+
+  powershell-db-disk-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse DB disk-full PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            "scripts/prepare_db_disk_full_training.ps1",
+            "scripts/inject_db_disk_full.ps1",
+            "scripts/battle_inject_fault.ps1",
+            "scripts/battle_reset.ps1",
+            "scripts/pure_docker_up.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+
+            if ($errors.Count -gt 0) {
+              Write-Host "PowerShell parse errors in $file" -ForegroundColor Red
+              $errors | ForEach-Object { Write-Host $_.Message -ForegroundColor Red }
+              exit 1
+            }
+          }
+          Write-Host "PowerShell syntax OK."
