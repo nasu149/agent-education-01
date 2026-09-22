@@ -41,11 +41,26 @@ Tool 接続            -> MCP
 
 ## 触るファイル
 
-基本的にここだけです。
+基本的に次の2ファイルです。
 
 ```text
+agent/src/agent/nodes.py
 agent/src/agent/graph.py
 ```
+
+役割はシンプルです。
+
+```text
+nodes.py
+  -> State / Prompt / 各Nodeの処理
+  -> TODO 1〜4
+
+graph.py
+  -> Node / Edge / Conditional Edge の接続
+  -> TODO 5
+```
+
+まず `graph.py` を見て全体像を確認し、その後 `nodes.py` で各 Node の処理を実装してください。
 
 次は講師側の完成済み部分なので変更しません。
 
@@ -86,7 +101,8 @@ START -> starter -> END
 
 障害は検知しますが、調査・復旧は行いません。
 
-`agent/src/agent/graph.py` の TODO 1〜5 を探してください。
+`agent/src/agent/nodes.py` の TODO 1〜4 と、
+`agent/src/agent/graph.py` の TODO 5 を探してください。
 
 ### TODOコメントは消さない
 
@@ -156,7 +172,7 @@ Prompt はチームの個性を出してよい場所です。
 使うもの:
 
 ```python
-investigator_llm
+self.investigator_llm
 state["messages"]
 SystemMessage
 ```
