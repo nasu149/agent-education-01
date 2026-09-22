@@ -1,5 +1,9 @@
 # AI Agent研修 - 3チーム対抗スターター
 
+> **このブランチは講師用模範解答です。**  
+> `training/team-agent-battle` のTODO・問題文・placeholderをできるだけ残し、解答だけを追記しています。  
+> GitHubのbranch diffを見ると、新人が追加するコードをそのまま追いやすい構成です。
+
 このブランチ `training/team-agent-battle` は、前段の Docker 研修で作成した
 
 ```text
