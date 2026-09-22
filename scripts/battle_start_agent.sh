@@ -74,7 +74,7 @@ docker run -d \
   -e DB_ADMIN_NAME=memberdb \
   -e DB_ADMIN_USER=postgres \
   -e DB_ADMIN_PASSWORD=postgres \
-  -e TERMINABLE_DB_APPLICATIONS=fault-injector \
+  -e TERMINABLE_DB_APPLICATIONS=fault-injector,fault-locker \
   -e FAULT_DB_USER=fault_injector \
   -e HEALTH_CHECK_INTERVAL_SECONDS="$HEALTH_CHECK_INTERVAL_SECONDS" \
   -e MONITOR_STARTUP_GRACE_SECONDS="$MONITOR_STARTUP_GRACE_SECONDS" \
