@@ -19,6 +19,7 @@ TOMCAT_CONTAINER="agent-education-tomcat"
 HTTPD_CONTAINER="agent-education-httpd"
 AGENT_CONTAINER="agent-education-agent"
 FAULT_CONTAINER="agent-education-fault-injector"
+LOCK_CONTAINER="agent-education-lock-injector"
 
 if [[ -z "${GEMINI_API_KEY:-}" ]]; then
   echo "GEMINI_API_KEY is required. Example: export GEMINI_API_KEY=..." >&2
@@ -45,7 +46,7 @@ echo "==> LangGraph console print mode: $LANGGRAPH_PRINT_MODE"
 
 cd "$ROOT_DIR"
 
-for container in "$FAULT_CONTAINER" "$AGENT_CONTAINER" "$HTTPD_CONTAINER" "$TOMCAT_CONTAINER" "$POSTGRES_CONTAINER"; do
+for container in "$LOCK_CONTAINER" "$FAULT_CONTAINER" "$AGENT_CONTAINER" "$HTTPD_CONTAINER" "$TOMCAT_CONTAINER" "$POSTGRES_CONTAINER"; do
   docker rm -f "$container" >/dev/null 2>&1 || true
 done
 
@@ -131,7 +132,7 @@ docker run -d \
   -e DB_ADMIN_NAME=memberdb \
   -e DB_ADMIN_USER=postgres \
   -e DB_ADMIN_PASSWORD=postgres \
-  -e TERMINABLE_DB_APPLICATIONS=fault-injector \
+  -e TERMINABLE_DB_APPLICATIONS=fault-injector,fault-locker \
   -e FAULT_DB_USER=fault_injector \
   -e HEALTH_CHECK_INTERVAL_SECONDS="$HEALTH_CHECK_INTERVAL_SECONDS" \
   -e MONITOR_STARTUP_GRACE_SECONDS="$MONITOR_STARTUP_GRACE_SECONDS" \
@@ -150,5 +151,6 @@ echo
 echo "Agent log / LangGraph State updates:"
 echo "  docker logs -f agent-education-agent"
 echo
-echo "Inject the incident with:"
+echo "Inject an incident with:"
 echo "  ./scripts/inject_db_connection_exhaustion.sh"
+echo "  ./scripts/inject_db_lock.sh"
