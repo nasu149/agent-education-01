@@ -91,6 +91,7 @@ if ($GeminiModel -eq "gemini-2.5-flash-lite") {
 $LangGraphPrintMode = if ($env:LANGGRAPH_PRINT_MODE) { $env:LANGGRAPH_PRINT_MODE } else { "updates" }
 Write-Host "==> Gemini model: $GeminiModel"
 Write-Host "==> LangGraph console print mode: $LangGraphPrintMode"
+Write-Host "==> PostgreSQL training disk size: $TrainingDbDiskSize"
 
 $HealthCheckInterval = if ($env:HEALTH_CHECK_INTERVAL_SECONDS) { $env:HEALTH_CHECK_INTERVAL_SECONDS } else { "5" }
 $MonitorStartupGrace = if ($env:MONITOR_STARTUP_GRACE_SECONDS) { $env:MONITOR_STARTUP_GRACE_SECONDS } else { "20" }
@@ -98,6 +99,7 @@ $FailureThreshold = if ($env:FAILURE_THRESHOLD) { $env:FAILURE_THRESHOLD } else 
 $MaxInvestigationToolResults = if ($env:MAX_INVESTIGATION_TOOL_RESULTS) { $env:MAX_INVESTIGATION_TOOL_RESULTS } else { "8" }
 $VerifyRetryLimit = if ($env:VERIFY_RETRY_LIMIT) { $env:VERIFY_RETRY_LIMIT } else { "1" }
 $LogLevel = if ($env:LOG_LEVEL) { $env:LOG_LEVEL } else { "INFO" }
+$TrainingDbDiskSize = if ($env:TRAINING_DB_DISK_SIZE) { $env:TRAINING_DB_DISK_SIZE } else { "32m" }
 
 Push-Location $RootDir
 try {
@@ -133,6 +135,7 @@ try {
         "-e", "APP_DB_PASSWORD=memberapp",
         "-e", "FAULT_DB_PASSWORD=fault_injector",
         "-v", "${Volume}:/var/lib/postgresql/data",
+        "--tmpfs", "/training-disk:rw,size=$TrainingDbDiskSize,mode=1777",
         "agent-education-postgres",
         "postgres", "-c", "max_connections=20", "-c", "superuser_reserved_connections=3"
     ) | Out-Null
@@ -150,6 +153,13 @@ try {
         & docker logs $PostgresContainer
         throw "PostgreSQL did not become ready within 40 seconds."
     }
+
+    Write-Host "==> Preparing PostgreSQL training tablespace"
+    & docker exec $PostgresContainer psql -U postgres -d memberdb -v ON_ERROR_STOP=0 -c "DROP TRIGGER IF EXISTS training_member_insert_audit ON members; DROP FUNCTION IF EXISTS training_capture_member_insert(); DROP TABLE IF EXISTS training_write_audit;" *> $null
+    & docker exec $PostgresContainer psql -U postgres -d memberdb -v ON_ERROR_STOP=0 -c "DROP TABLESPACE IF EXISTS training_disk_ts;" *> $null
+    Invoke-Docker @("exec", $PostgresContainer, "sh", "-c", "rm -rf /training-disk/pgspace && mkdir -p /training-disk/pgspace /training-disk/archive && chown postgres:postgres /training-disk/pgspace /training-disk/archive && chmod 700 /training-disk/pgspace && chmod 755 /training-disk/archive")
+    Get-Content -Raw "postgres/training_disk_setup.sql" | & docker exec -i $PostgresContainer psql -U postgres -d memberdb
+    if ($LASTEXITCODE -ne 0) { throw "Failed to prepare PostgreSQL training tablespace." }
 
     Write-Host "==> Starting Tomcat"
     Invoke-Docker @(
@@ -217,6 +227,7 @@ try {
     Write-Host ""
     Write-Host "Inject the incident with:"
     Write-Host "  .\scripts\inject_db_connection_exhaustion.ps1"
+    Write-Host "  .\scripts\inject_db_disk_full.ps1"
 }
 finally {
     Pop-Location
