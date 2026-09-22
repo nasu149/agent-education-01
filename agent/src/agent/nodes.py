@@ -81,6 +81,9 @@ still running, inspect PostgreSQL connection state instead of assuming the DB
 process itself is down.
 When enough evidence exists to diagnose the incident, stop calling tools and
 summarize the investigation briefly.
+Do not ask to execute mutation tools, and do not invent tool output.
+When the evidence is sufficient, finish the investigation instead of repeatedly
+calling similar tools.
 """
 
 
@@ -185,6 +188,42 @@ class IncidentNodes:
         注意:
         mutation Tool は investigator_llm に bind してはいけない。
         """
+        # ===== 模範解答（TODO 2）=====
+        self.emit_state("investigate", state)
+
+        messages = [
+            SystemMessage(content=INVESTIGATION_SYSTEM_PROMPT),
+            *state["messages"],
+        ]
+
+        if (
+            state["investigation_tool_results"]
+            >= self.settings.max_investigation_tool_results
+        ):
+            self.emit_event(
+                "WARN",
+                "Investigation observation budget reached; forcing a conclusion",
+            )
+            messages.append(
+                HumanMessage(
+                    content=(
+                        "Observation budget reached. Do not call more tools. "
+                        "Summarize the evidence and finish the investigation."
+                    )
+                )
+            )
+            response = await self.llm.ainvoke(messages)
+        else:
+            response = await self.investigator_llm.ainvoke(messages)
+
+        if isinstance(response, AIMessage) and response.tool_calls:
+            names = ", ".join(call["name"] for call in response.tool_calls)
+            self.emit_event("INFO", f"LLM selected tool(s): {names}")
+        else:
+            self.emit_event("INFO", "LLM ended the investigation loop")
+
+        return {"messages": [response]}
+
         raise NotImplementedError("TODO 2: investigate を実装してください")
 
     # ------------------------------------------------------------------
@@ -229,6 +268,33 @@ class IncidentNodes:
         「調査」と「判断」を Node として分けることで、
         Agent の自由な探索を Graph の明示的な State に戻す。
         """
+        # ===== 模範解答（TODO 3）=====
+        self.emit_state("judge", state)
+
+        prompt = [
+            SystemMessage(content=JUDGE_SYSTEM_PROMPT),
+            *state["messages"],
+            HumanMessage(content="Produce the structured Diagnosis now."),
+        ]
+
+        diagnosis = await self.diagnosis_llm.ainvoke(prompt)
+
+        self.emit_event(
+            "INFO",
+            (
+                f"Diagnosis: {diagnosis.root_cause} | "
+                f"action={diagnosis.recommended_action} "
+                f"target={diagnosis.target_service} "
+                f"application={diagnosis.target_application} "
+                f"confidence={diagnosis.confidence}"
+            ),
+        )
+
+        return {
+            "diagnosis": diagnosis,
+            "investigation_tool_results": 0,
+        }
+
         raise NotImplementedError("TODO 3: judge を実装してください")
 
     # ------------------------------------------------------------------
@@ -264,6 +330,28 @@ class IncidentNodes:
         - interrupt() より前に mutation Tool を実行しない
         - LLM に mutation Tool を直接渡さない
         """
+        # ===== 模範解答（TODO 4）=====
+        self.emit_state("approval", state)
+
+        diagnosis = state["diagnosis"]
+        if diagnosis is None:
+            raise RuntimeError("approval node requires diagnosis")
+
+        payload = ApprovalRequest(
+            action=diagnosis.recommended_action,
+            target_service=diagnosis.target_service,
+            target_application=diagnosis.target_application,
+            root_cause=diagnosis.root_cause,
+            evidence=diagnosis.evidence,
+            reason=diagnosis.action_reason,
+        ).model_dump()
+
+        approved = interrupt(payload)
+
+        return {
+            "approval": "approved" if bool(approved) else "rejected",
+        }
+
         raise NotImplementedError("TODO 4: approval を実装してください")
 
     def after_approval(
