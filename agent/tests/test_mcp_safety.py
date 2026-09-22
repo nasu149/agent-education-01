@@ -12,7 +12,7 @@ def test_config_reader_is_whitelisted():
 
 
 def test_database_remediation_is_narrowly_allowlisted():
-    assert server.TERMINABLE_DB_APPLICATIONS == {"fault-injector"}
+    assert server.TERMINABLE_DB_APPLICATIONS == {"fault-injector", "fault-locker"}
     assert server.FAULT_DB_USER == "fault_injector"
 
 
