@@ -69,6 +69,7 @@ class IncidentState(TypedDict):
 # - 特定の競技問題だけを直接判定する hard-code
 #
 # 下は最低限動く baseline。チームごとに改善してよい。
+# TODO E5: write probe失敗時にDB disk-fullも追加調査できるよう Prompt を拡張する。
 INVESTIGATION_SYSTEM_PROMPT = """\
 あなたは、次の構成の研修用 Web システムで障害の初動調査を担当します。
 ブラウザー -> httpd -> Tomcat -> PostgreSQL。
@@ -86,6 +87,7 @@ DB プロセス自体が停止していると決めつけず、PostgreSQL の接
 """
 
 
+# TODO E5: cleanup_postgres_training_exports を判断候補へ追加し、観測条件を書く。
 JUDGE_SYSTEM_PROMPT = """\
 あなたは、障害対応ワークフローの判断段階を担当します。
 これまでに収集した会話とツールの実行結果だけを使ってください。
@@ -309,6 +311,7 @@ class IncidentNodes:
             "start_container",
             "restart_container",
             "terminate_postgres_connections",
+            # TODO E5: cleanup_postgres_training_exports を Human Approval に進める
         }:
             return "approval"
         return "report"
