@@ -69,6 +69,9 @@ class IncidentState(TypedDict):
 # - 特定の競技問題だけを直接判定する hard-code
 #
 # 下は最低限動く baseline。チームごとに改善してよい。
+# ===== 模範解答（TODO E5）=====
+# synthetic write probe が失敗しても GET が成功し、PostgreSQL container も running の場合は、
+# DB停止と決めつけず、PostgreSQL の研修用ストレージ容量と大容量ファイルを確認する。
 # TODO E5: write probe失敗時にDB disk-fullも追加調査できるよう Prompt を拡張する。
 INVESTIGATION_SYSTEM_PROMPT = """\
 あなたは、次の構成の研修用 Web システムで障害の初動調査を担当します。
@@ -80,6 +83,8 @@ INVESTIGATION_SYSTEM_PROMPT = """\
 可能な限り、複数の観測結果を照らし合わせてから結論を出してください。
 PostgreSQL が稼働中なのにアプリケーションログがデータベース接続の問題を示す場合は、
 DB プロセス自体が停止していると決めつけず、PostgreSQL の接続状態を確認してください。
+synthetic write probe が失敗している一方で GET が成功し、PostgreSQL も稼働中なら、
+PostgreSQL の研修用ディスク使用率と大容量ファイルを追加で確認してください。
 障害を診断するのに十分な証拠が集まったら、ツールの呼び出しを止め、
 調査結果を簡潔にまとめてください。
 状態を変更するツールの実行を求めたり、ツールの出力を捏造したりしないでください。
@@ -99,6 +104,7 @@ recommended_action は次のいずれかを選んでください。
 - start_container
 - restart_container
 - terminate_postgres_connections
+- cleanup_postgres_training_exports
 - manual
 - none
 
@@ -107,6 +113,10 @@ restart_container は、稼働中のサービスに明らかに再起動が必�
 terminate_postgres_connections は、特定の application_name による異常な PostgreSQL
 セッションが観測された場合にだけ選んでください。
 terminate_postgres_connections では、観測された application_name を正確に指定してください。
+cleanup_postgres_training_exports は、PostgreSQL の /training-disk が高使用率で、
+list_postgres_training_disk_files に
+/training-disk/archive/training-overnight-export.bin が大容量ファイルとして観測された場合に
+だけ選んでください。その場合 target_service は postgres にしてください。
 
 復旧に設定変更、認証情報の修正、または許可された状態変更ツールの範囲外の操作が
 必要な場合は、manual を選んでください。
@@ -311,6 +321,8 @@ class IncidentNodes:
             "start_container",
             "restart_container",
             "terminate_postgres_connections",
+            # ===== 模範解答（TODO E5）=====
+            "cleanup_postgres_training_exports",
             # TODO E5: cleanup_postgres_training_exports を Human Approval に進める
         }:
             return "approval"
