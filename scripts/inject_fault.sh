@@ -20,8 +20,15 @@ case "$FAULT" in
   db-connections)
     docker compose --profile fault up -d --build fault-injector
     ;;
+  disk-full)
+    docker compose exec -T tomcat sh -c "
+      mkdir -p /training-disk/archive
+      rm -f /training-disk/archive/training-old-audit.log
+      dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1M count=128 status=none 2>/dev/null || true
+    "
+    ;;
   *)
-    echo "Usage: $0 {tomcat-stop|postgres-stop|proxy-port|db-password|db-connections}" >&2
+    echo "Usage: $0 {tomcat-stop|postgres-stop|proxy-port|db-password|db-connections|disk-full}" >&2
     exit 2
     ;;
 esac
