@@ -65,7 +65,7 @@ services:
       DB_ADMIN_NAME: memberdb
       DB_ADMIN_USER: postgres
       DB_ADMIN_PASSWORD: postgres
-      TERMINABLE_DB_APPLICATIONS: fault-injector
+      TERMINABLE_DB_APPLICATIONS: fault-injector,fault-locker
       FAULT_DB_USER: fault_injector
       HEALTH_CHECK_INTERVAL_SECONDS: ${HEALTH_CHECK_INTERVAL_SECONDS:-5}
       MONITOR_STARTUP_GRACE_SECONDS: ${MONITOR_STARTUP_GRACE_SECONDS:-20}
@@ -95,6 +95,24 @@ services:
       DB_PASSWORD: fault_injector
       DB_APPLICATION_NAME: fault-injector
       FAULT_MAX_CONNECTIONS: "100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Not started normally. It holds an ACCESS EXCLUSIVE lock on the members
+  # table so GET /api/members blocks while PostgreSQL itself stays healthy.
+  lock-injector:
+    build:
+      context: ./fault-injector
+    profiles: ["fault"]
+    command: ["python", "-u", "/app/hold_table_lock.py"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: memberdb
+      DB_USER: fault_injector
+      DB_PASSWORD: fault_injector
+      DB_APPLICATION_NAME: fault-locker
     depends_on:
       postgres:
         condition: service_healthy
