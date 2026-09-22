@@ -166,6 +166,10 @@ Docker研修までは把握しているが、AI Agent ハンズオン案は初�
 
 [docs/DB_CONNECTION_EXHAUSTION.md](docs/DB_CONNECTION_EXHAUSTION.md)
 
+### Disk Full 障害の技術説明
+
+[docs/DISK_FULL.md](docs/DISK_FULL.md)
+
 ## 共有 VM の初期起動
 
 Linux / Oracle Linux を想定:
@@ -233,6 +237,7 @@ curl -f http://localhost:8090/api/status
 ./scripts/battle_inject_fault.sh tomcat-stop
 ./scripts/battle_inject_fault.sh postgres-stop
 ./scripts/battle_inject_fault.sh db-connections
+./scripts/battle_inject_fault.sh disk-full
 ./scripts/battle_inject_fault.sh proxy-port
 ./scripts/battle_inject_fault.sh db-password
 ```
@@ -268,3 +273,38 @@ Round 3: proxy-port
 - 障害の答えの hard-code
 
 「何でもできるAgent」ではなく、**権限を限定した上で適切に判断できるAgent**を作る研修です。
+
+
+## Experimental scenario: disk-full
+
+このブランチ `experiment/disk-full` では、Tomcat に小さい研修用ファイルシステムを持たせ、
+夜間ログ肥大化による disk full を再現できます。
+
+前日の Docker 研修終了後などに、講師側で Tomcat だけを作り直します。
+
+~~~bash
+./scripts/prepare_disk_full_training.sh
+~~~
+
+これにより Tomcat に容量16MBの `/training-disk` が付きます。
+
+障害注入:
+
+~~~bash
+./scripts/battle_inject_fault.sh disk-full
+~~~
+
+Agent が利用する追加 Tool:
+
+~~~text
+read-only:
+  get_disk_usage
+  list_large_files
+
+mutation:
+  cleanup_training_logs
+~~~
+
+`cleanup_training_logs` が削除できるのは
+`/training-disk/archive/training-*.log` だけです。
+任意 shell や任意 path の削除は許可していません。
