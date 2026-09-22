@@ -372,6 +372,14 @@ def get_postgres_training_disk_usage(service: str = "postgres") -> dict[str, Any
     _training_db_disk_usage(service) を利用して、構造化された使用率を返してください。
     任意 path は受け取らず、対象は postgres 固定です。
     """
+    # ===== 模範解答（TODO E1）=====
+    LOGGER.info(
+        "get_postgres_training_disk_usage service=%s path=%s",
+        service,
+        TRAINING_DB_DISK_PATH,
+    )
+    return _training_db_disk_usage(service)
+
     raise NotImplementedError("TODO E1: get_postgres_training_disk_usage を実装してください")
 
 
@@ -391,6 +399,45 @@ def list_postgres_training_disk_files(
     - LLM から任意 path / shell command を受け取らない
     - path と size_kb を返す
     """
+    # ===== 模範解答（TODO E2）=====
+    container = _require_training_db_disk_service(service)
+    safe_limit = max(1, min(int(limit), 20))
+    LOGGER.info(
+        "list_postgres_training_disk_files service=%s path=%s limit=%s",
+        service,
+        TRAINING_DB_DISK_PATH,
+        safe_limit,
+    )
+
+    command = (
+        f"find '{TRAINING_DB_DISK_PATH}' -type f -exec du -k {{}} + "
+        f"2>/dev/null | sort -nr | head -n {safe_limit}"
+    )
+    exit_code, output = container.exec_run(["sh", "-c", command])
+    text = output.decode("utf-8", errors="replace")
+
+    files: list[dict[str, Any]] = []
+    if exit_code == 0:
+        for line in text.splitlines():
+            size_text, separator, path = line.partition("\t")
+            if not separator:
+                parts = line.split(maxsplit=1)
+                if len(parts) != 2:
+                    continue
+                size_text, path = parts
+            try:
+                size_kb = int(size_text)
+            except ValueError:
+                continue
+            files.append({"path": path, "size_kb": size_kb})
+
+    return {
+        "service": service,
+        "path": TRAINING_DB_DISK_PATH,
+        "files": files,
+        "command_exit_code": exit_code,
+    }
+
     raise NotImplementedError("TODO E2: list_postgres_training_disk_files を実装してください")
 
 
@@ -409,6 +456,32 @@ def cleanup_postgres_training_exports(
     - pgspace や任意 path を削除しない
     - cleanup 前後の disk usage と削除結果を返す
     """
+    # ===== 模範解答（TODO E3）=====
+    container = _require_training_db_disk_service(service)
+    before = _training_db_disk_usage(service)
+
+    LOGGER.warning(
+        "MUTATION cleanup_postgres_training_exports service=%s target=%s",
+        service,
+        TRAINING_DB_EXPORT_PATH,
+    )
+
+    exists_code, _ = container.exec_run(["test", "-f", TRAINING_DB_EXPORT_PATH])
+    deleted = False
+    if exists_code == 0:
+        delete_code, _ = container.exec_run(["rm", "-f", TRAINING_DB_EXPORT_PATH])
+        deleted = delete_code == 0
+
+    after = _training_db_disk_usage(service)
+    return {
+        "action": "cleanup_postgres_training_exports",
+        "service": service,
+        "target": TRAINING_DB_EXPORT_PATH,
+        "deleted": deleted,
+        "before": before,
+        "after": after,
+    }
+
     raise NotImplementedError("TODO E3: cleanup_postgres_training_exports を実装してください")
 
 
