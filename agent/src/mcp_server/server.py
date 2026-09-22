@@ -57,6 +57,13 @@ TERMINABLE_DB_APPLICATIONS = {
     if item.strip()
 }
 
+TRAINING_DISK_SERVICE = "tomcat"
+TRAINING_DISK_PATH = os.getenv("TRAINING_DISK_PATH", "/training-disk")
+TRAINING_LOG_ARCHIVE_DIR = os.getenv(
+    "TRAINING_LOG_ARCHIVE_DIR",
+    f"{TRAINING_DISK_PATH}/archive",
+)
+
 
 def _client():
     """マウントされたローカルの Docker ソケットに接続する SDK クライアントを作成する。"""
@@ -309,6 +316,96 @@ def get_postgres_connection_summary() -> dict[str, Any]:
         "activity": activity,
     }
 
+
+def _require_training_disk_service(service: str):
+    if service != TRAINING_DISK_SERVICE:
+        raise ValueError(
+            f"training disk tools only permit service={TRAINING_DISK_SERVICE!r}"
+        )
+    return _container_for_service(service)
+
+
+def _training_disk_usage(service: str) -> dict[str, Any]:
+    container = _require_training_disk_service(service)
+    exit_code, output = container.exec_run(["df", "-Pk", TRAINING_DISK_PATH])
+    text = output.decode("utf-8", errors="replace")
+    if exit_code != 0:
+        return {
+            "service": service,
+            "path": TRAINING_DISK_PATH,
+            "error": text.strip(),
+        }
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return {
+            "service": service,
+            "path": TRAINING_DISK_PATH,
+            "error": f"unexpected df output: {text!r}",
+        }
+
+    fields = lines[-1].split()
+    if len(fields) < 6:
+        return {
+            "service": service,
+            "path": TRAINING_DISK_PATH,
+            "error": f"unexpected df fields: {lines[-1]!r}",
+        }
+
+    percent_text = fields[4].rstrip("%")
+    return {
+        "service": service,
+        "path": TRAINING_DISK_PATH,
+        "filesystem": fields[0],
+        "size_kb": int(fields[1]),
+        "used_kb": int(fields[2]),
+        "available_kb": int(fields[3]),
+        "use_percent": int(percent_text),
+        "mount_point": fields[5],
+    }
+
+
+@mcp.tool()
+def get_disk_usage(service: str = "tomcat") -> dict[str, Any]:
+    """Tomcat の研修用ディスク /training-disk の容量使用率を確認する。
+
+    TODO D1:
+    _training_disk_usage(service) を利用し、読み取り専用 Tool として
+    構造化されたディスク使用率を返してください。
+    対象サービスやパスの安全制約は講師側 helper に実装済みです。
+    """
+    raise NotImplementedError("TODO D1: get_disk_usage を実装してください")
+
+@mcp.tool()
+def list_large_files(service: str = "tomcat", limit: int = 10) -> dict[str, Any]:
+    """Tomcat の /training-disk 配下で容量を使っているファイルを確認する。
+
+    TODO D2:
+    /training-disk 配下だけを対象に、大きいファイルをサイズ降順で返してください。
+
+    条件:
+    - service は tomcat 固定
+    - limit は 1〜20 に丸める
+    - LLM から任意 path を受け取らない
+    - 戻り値には path と size_kb を含める
+    """
+    raise NotImplementedError("TODO D2: list_large_files を実装してください")
+
+@mcp.tool()
+def cleanup_training_logs(service: str = "tomcat") -> dict[str, Any]:
+    """人間の承認後、研修用 archive ディレクトリの古い模擬ログだけを削除する。
+
+    TODO D3:
+    disk-full 復旧用 mutation Tool を実装してください。
+
+    安全条件:
+    - service は tomcat 固定
+    - 削除対象は /training-disk/archive/training-*.log のみ
+    - active audit log は削除しない
+    - 任意 path / 任意 shell を外部引数として受け取らない
+    - cleanup 前後のディスク使用率と、削除成功/失敗一覧を返す
+    """
+    raise NotImplementedError("TODO D3: cleanup_training_logs を実装してください")
 
 @mcp.tool()
 def start_container(service: str) -> dict[str, str]:
