@@ -33,6 +33,11 @@ for _ in $(seq 1 30); do
 done
 docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d memberdb >/dev/null
 
+echo "==> Removing disk-full training archives"
+if docker exec "$TOMCAT_CONTAINER" test -d /training-disk >/dev/null 2>&1; then
+  docker exec "$TOMCAT_CONTAINER" sh -c     "rm -f /training-disk/archive/training-*.log 2>/dev/null || true"
+fi
+
 echo "==> Restoring DB password"
 docker exec "$POSTGRES_CONTAINER" \
   psql -U postgres -d memberdb \
