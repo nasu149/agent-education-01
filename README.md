@@ -1,3 +1,7 @@
+> **このブランチ `training/disk-full-solution` は講師用模範解答です。**  
+> `training/disk-full` のTODO・placeholderを残したまま、回答コードだけを追記しています。  
+> GitHubのbranch diffで、新人が追加する実装をほぼそのまま確認できます。
+
 # AI Agent研修 - Disk Full 拡張課題
 
 > **このブランチ `training/disk-full` は受講者向けの問題版です。**  
