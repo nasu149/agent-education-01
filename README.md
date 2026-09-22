@@ -1,270 +1,150 @@
-# AI Agent研修 - 3チーム対抗スターター
+# AI Agent研修 - DB Disk Full 拡張課題
 
-> **このブランチは講師用模範解答です。**  
-> `training/team-agent-battle` のTODO・問題文・placeholderをできるだけ残し、解答だけを追記しています。  
-> GitHubのbranch diffを見ると、新人が追加するコードをそのまま追いやすい構成です。
+> **このブランチ `training/db-disk-full` は受講者向けの問題版です。**
+>
+> 前日の Java CRUD アプリは一切変更しません。
+> `member-app/src` / WAR / Tomcat アプリの再コンパイル・再デプロイは不要です。
 
-このブランチ `training/team-agent-battle` は、前段の Docker 研修で作成した
+## シナリオ
 
-```text
+前日の構成をそのまま使います。
+
+~~~text
 Browser -> httpd -> Tomcat -> PostgreSQL
-```
+~~~
 
-の名簿管理システムを使い、3チームがそれぞれ障害対応 AI Agent を作成して最後に同一条件で比較するための研修スターターです。
+追加するのは PostgreSQL 側の研修用ストレージだけです。
 
-## 研修の狙い
+~~~text
+PostgreSQL container
 
-LangGraph API の暗記ではなく、次の境界を体験します。
+/var/lib/postgresql/data
+  └─ 通常のDBデータ
 
-```text
-普通のプログラム   -> 決定的な処理
-LLM                -> 状況依存の判断
-Tool               -> 外部の観測・操作
-MCP                -> Tool 接続
-Human              -> 危険操作の承認
-LangGraph          -> State / flow / loop / 権限制御
-```
+/training-disk  32MB tmpfs
+  ├─ pgspace/
+  │   └─ training_write_audit
+  └─ archive/
+      └─ training-overnight-export.bin
+~~~
 
-最終的な Agent の考え方は、
+`members` テーブル自体は通常の PostgreSQL データ領域に残します。
 
-```text
-Observe -> Decide -> Act -> Re-observe
-```
+DB側にtraining-onlyのINSERT triggerを追加し、既存アプリの `POST /api/members` が成功したときだけ `training_write_audit` に監査レコードを1件書きます。
 
-です。
+## なぜ Java を変更しないのか
 
-## 3チーム対抗方式
+Javaアプリは元からCRUDを持っています。
 
-約15名を3チームに分け、全チームが同じ starter から同じ障害対応 Agent を作成します。
+~~~text
+GET    /api/members       -> SELECT
+POST   /api/members       -> INSERT
+PUT    /api/members/{id}  -> UPDATE
+DELETE /api/members/{id}  -> DELETE
+~~~
 
-最後に1台の共有 VM 上で、Agent を1チームずつ起動し、同じ障害を順番に注入します。
+この既存POSTをsynthetic write health checkとして使います。
 
-```text
-reset
+~~~text
+POST synthetic member
   ↓
-Team A Agent
+正常なら201
   ↓
-fault
+DELETE synthetic member
   ↓
-result
+正常
 
-reset
+disk-full時:
+POST
   ↓
-Team B Agent
+members INSERT
   ↓
-same fault
+DB-side audit trigger
   ↓
-result
-
-reset
+training_write_audit へ書けない
   ↓
-Team C Agent
-```
+transaction rollback
+  ↓
+HTTP 500
+~~~
 
-3つの Agent を同時に障害対応させないため、同じ Tomcat / PostgreSQL を取り合うことはありません。
+disk-full中でも `GET /api/members` は200のままです。つまり「HTTPが返る = 正常」ではなく、実際の書き込みまで確認するsynthetic monitoringを扱えます。
 
-## 新人が主に編集する場所
+## 講師側の準備
 
-```text
-agent/src/agent/nodes.py   # TODO 1〜4: Prompt / investigate / judge / approval
-agent/src/agent/graph.py   # TODO 5: Node / Edge の配線
-```
+Linux / Oracle Linux:
 
-役割を分けています。
+~~~bash
+./scripts/prepare_db_disk_full_training.sh
+~~~
 
-```text
-nodes.py = 各 Node が「何をするか」
-graph.py = 各 Node を「どう繋ぐか」
-```
+Windows PowerShell:
 
-`graph.py` を開けば LangGraph の全体構造だけを追えるようにしています。
+~~~powershell
+.\scripts\prepare_db_disk_full_training.ps1
+~~~
 
-開始時点は安全な placeholder Graph です。
+Tomcat / Java / httpdは変更せず、PostgreSQL containerだけ既存volumeを使って作り直します。
 
-```text
-START -> starter -> END
-```
+## 障害注入
 
-受講者はコード内の `TODO 1〜5` を進めます。
+~~~bash
+./scripts/battle_inject_fault.sh db-disk-full
+~~~
 
-**TODO コメントは問題文です。基本的に消さず、その直下へ実装を書いてください。**
-講師用 solution branch も同じ TODO コメントを残したまま、直下へ模範解答を書いています。
+~~~powershell
+.\scripts\battle_inject_fault.ps1 db-disk-full
+~~~
 
-主な実装対象:
+夜間exportが暴走した想定で `/training-disk/archive/training-overnight-export.bin` をddで肥大化させます。
 
-1. 調査 Prompt の設計
-2. `investigate`
-3. `judge`
-4. `approval`
-5. LangGraph の Node / Edge / loop の配線
+## 受講者課題
 
-講師側で完成済み:
+主に編集するのは次の4ファイルです。
 
-- Docker / 対象システム
-- Health Checker
-- Dashboard / API
-- MCP Server
-- read-only / mutation Tool
-- mutation Tool の安全な実行処理
-- `verify`
-- `report`
-- fault injector
+~~~text
+agent/src/mcp_server/server.py
+agent/src/agent/mcp_tools.py
+agent/src/agent/models.py
+agent/src/agent/nodes.py
+~~~
 
-## 完成時の Graph
-
-```text
-START
-  |
-  v
-investigate <------ tools
-  |                  |
-  +------------------+
-  |
-  v
-judge
-  |
-  +---- manual / none ------> report
-  |
-  v
-approval
-  |
-  +---- reject --------------> report
-  |
-  v
-remediate
-  |
-  v
-verify ---- failure ---------> investigate
-  |
-  v
-report
-  |
- END
-```
-
-## 資料
-
-### 上司・企画説明
-
-[docs/TEAM_AGENT_BATTLE_PROPOSAL.md](docs/TEAM_AGENT_BATTLE_PROPOSAL.md)
-
-Docker研修までは把握しているが、AI Agent ハンズオン案は初見、という前提で書いています。
-
-### 受講者向け
-
-[docs/TEAM_AGENT_BATTLE_HANDS_ON.md](docs/TEAM_AGENT_BATTLE_HANDS_ON.md)
-
-### 競技ルール・採点
-
-[docs/TEAM_AGENT_BATTLE_RULES.md](docs/TEAM_AGENT_BATTLE_RULES.md)
-
-### 講師向け運営
-
-[docs/TEAM_AGENT_BATTLE_INSTRUCTOR_GUIDE.md](docs/TEAM_AGENT_BATTLE_INSTRUCTOR_GUIDE.md)
-
-### DB connection exhaustion の技術説明
-
-[docs/DB_CONNECTION_EXHAUSTION.md](docs/DB_CONNECTION_EXHAUSTION.md)
-
-## 共有 VM の初期起動
-
-Linux / Oracle Linux を想定:
-
-```bash
-cp .env.example .env
-# .env を編集して GEMINI_API_KEY などを設定
-chmod +x scripts/*.sh
-./scripts/pure_docker_up.sh
-```
-
-`pure_docker_up.sh` と `battle_start_agent.sh` はリポジトリ直下の `.env` を読み込みます。
-Docker Compose 利用時も同じ `.env` が使われます。
-
-主な設定:
-
-```dotenv
-HEALTH_CHECK_INTERVAL_SECONDS=5
-MONITOR_STARTUP_GRACE_SECONDS=20
-FAILURE_THRESHOLD=2
-GEMINI_TIMEOUT_SECONDS=90
-```
-
-起動ログにも実際に採用された値が表示されます。
-
-なお、Agent Dashboard は画面更新のため `GET /api/status` を約1.5秒ごとに呼びます。
-これはヘルスチェックではありません。実際のヘルスチェックは
-`HEALTH_CHECK_INTERVAL_SECONDS` ごとの `GET /api/members` です。
-
-確認:
-
-```bash
-curl -f http://localhost:8088/api/members
-curl -f http://localhost:8090/api/status
-```
-
-- 名簿アプリ: `http://VM_HOST:8088`
-- Agent Dashboard: `http://VM_HOST:8090`
-
-## Battle 補助 script
-
-### チーム Agent image を build
-
-各チームの working directory で:
-
-```bash
-./scripts/battle_build_agent.sh team-a
-```
-
-### 評価環境を正常化
-
-```bash
-./scripts/battle_reset.sh
-```
-
-### チーム Agent を起動
-
-```bash
-./scripts/battle_start_agent.sh team-a
-```
-
-### 障害注入
-
-```bash
-./scripts/battle_inject_fault.sh tomcat-stop
-./scripts/battle_inject_fault.sh postgres-stop
-./scripts/battle_inject_fault.sh db-connections
-./scripts/battle_inject_fault.sh proxy-port
-./scripts/battle_inject_fault.sh db-password
-```
-
-## 想定ラウンド
-
-Practice:
-
-```text
-tomcat-stop
-```
-
-Battle:
-
-```text
-Round 1: postgres-stop
-Round 2: db-connections
-Round 3: proxy-port
-```
-
-`proxy-port` は許可された mutation Tool だけでは修復できません。
-
-原因を特定し、`manual` と判断して人間へエスカレーションできれば成功です。
+- TODO E1: `get_postgres_training_disk_usage()`
+- TODO E2: `list_postgres_training_disk_files()`
+- TODO E3: `cleanup_postgres_training_exports()`
+- TODO E4: read-only / mutation Tool の分類
+- TODO E5: Diagnosis / Prompt / Human Approval routing
 
 ## Safety
 
-競技でも次は変更禁止です。
+復旧Toolが削除できるのは完全一致の1ファイルだけです。
 
-- mutation Tool を LLM に直接 bind
-- Human Approval を迂回
-- 任意 shell / 任意 SQL を Agent に追加
-- MCP Server / fault injector の競技用改造
-- 障害の答えの hard-code
+~~~text
+/training-disk/archive/training-overnight-export.bin
+~~~
 
-「何でもできるAgent」ではなく、**権限を限定した上で適切に判断できるAgent**を作る研修です。
+`/training-disk/pgspace/*`、通常のPostgreSQLデータ、任意path、任意shellは触れません。
+
+## 完成時の期待フロー
+
+~~~text
+synthetic write probe: POST -> 500
+    ↓
+GETは200 / 全container running
+    ↓
+get_postgres_training_disk_usage -> 100%
+    ↓
+list_postgres_training_disk_files
+    ↓
+training-overnight-export.bin が大部分
+    ↓
+Diagnosis
+    ↓
+Human Approval
+    ↓
+cleanup_postgres_training_exports
+    ↓
+verify: POST 201 -> DELETE 200
+~~~
+
+詳細: [docs/DB_DISK_FULL.md](docs/DB_DISK_FULL.md)
