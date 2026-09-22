@@ -20,8 +20,11 @@ case "$FAULT" in
   db-connections)
     docker compose --profile fault up -d --build fault-injector
     ;;
+  db-lock)
+    docker compose --profile fault up -d --build lock-injector
+    ;;
   *)
-    echo "Usage: $0 {tomcat-stop|postgres-stop|proxy-port|db-password|db-connections}" >&2
+    echo "Usage: $0 {tomcat-stop|postgres-stop|proxy-port|db-password|db-connections|db-lock}" >&2
     exit 2
     ;;
 esac
