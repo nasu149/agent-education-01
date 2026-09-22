@@ -19,6 +19,10 @@ case "$FAULT" in
     "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inject_db_connection_exhaustion.sh"
     ;;
 
+  disk-full)
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inject_disk_full.sh"
+    ;;
+
   proxy-port)
     docker exec "$HTTPD_CONTAINER" sh -c \
       "sed -i 's/tomcat:8080/tomcat:18080/g' /usr/local/apache2/conf/extra/member-app.conf && httpd -k graceful"
@@ -32,7 +36,7 @@ case "$FAULT" in
     ;;
 
   *)
-    echo "Usage: $0 {tomcat-stop|postgres-stop|db-connections|proxy-port|db-password}" >&2
+    echo "Usage: $0 {tomcat-stop|postgres-stop|db-connections|disk-full|proxy-port|db-password}" >&2
     exit 2
     ;;
 esac
