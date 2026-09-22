@@ -57,6 +57,13 @@ TERMINABLE_DB_APPLICATIONS = {
     if item.strip()
 }
 
+TRAINING_DISK_SERVICE = "tomcat"
+TRAINING_DISK_PATH = os.getenv("TRAINING_DISK_PATH", "/training-disk")
+TRAINING_LOG_ARCHIVE_DIR = os.getenv(
+    "TRAINING_LOG_ARCHIVE_DIR",
+    f"{TRAINING_DISK_PATH}/archive",
+)
+
 
 def _client():
     """マウントされたローカルの Docker ソケットに接続する SDK クライアントを作成する。"""
@@ -307,6 +314,169 @@ def get_postgres_connection_summary() -> dict[str, Any]:
         "ordinary_connection_capacity": ordinary_capacity,
         "observed_connections_excluding_this_mcp_session": observed_connections,
         "activity": activity,
+    }
+
+
+def _require_training_disk_service(service: str):
+    if service != TRAINING_DISK_SERVICE:
+        raise ValueError(
+            f"training disk tools only permit service={TRAINING_DISK_SERVICE!r}"
+        )
+    return _container_for_service(service)
+
+
+def _training_disk_usage(service: str) -> dict[str, Any]:
+    container = _require_training_disk_service(service)
+    exit_code, output = container.exec_run(["df", "-Pk", TRAINING_DISK_PATH])
+    text = output.decode("utf-8", errors="replace")
+    if exit_code != 0:
+        return {
+            "service": service,
+            "path": TRAINING_DISK_PATH,
+            "error": text.strip(),
+        }
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return {
+            "service": service,
+            "path": TRAINING_DISK_PATH,
+            "error": f"unexpected df output: {text!r}",
+        }
+
+    fields = lines[-1].split()
+    if len(fields) < 6:
+        return {
+            "service": service,
+            "path": TRAINING_DISK_PATH,
+            "error": f"unexpected df fields: {lines[-1]!r}",
+        }
+
+    percent_text = fields[4].rstrip("%")
+    return {
+        "service": service,
+        "path": TRAINING_DISK_PATH,
+        "filesystem": fields[0],
+        "size_kb": int(fields[1]),
+        "used_kb": int(fields[2]),
+        "available_kb": int(fields[3]),
+        "use_percent": int(percent_text),
+        "mount_point": fields[5],
+    }
+
+
+@mcp.tool()
+def get_disk_usage(service: str = "tomcat") -> dict[str, Any]:
+    """Tomcat の研修用ディスク /training-disk の容量使用率を確認する。
+
+    ディスクフルやファイル書き込み失敗が疑われる場合に使う読み取り専用 Tool。
+    対象サービスは tomcat 固定で、任意のパスは指定できない。
+    df -Pk の結果から総容量、使用量、空き容量、使用率を構造化して返す。
+    """
+
+    LOGGER.info("get_disk_usage service=%s path=%s", service, TRAINING_DISK_PATH)
+    return _training_disk_usage(service)
+
+
+@mcp.tool()
+def list_large_files(service: str = "tomcat", limit: int = 10) -> dict[str, Any]:
+    """Tomcat の /training-disk 配下で容量を使っているファイルを確認する。
+
+    ディスクフルの原因ファイルを特定するための読み取り専用 Tool。
+    対象は tomcat と /training-disk に固定し、最大20件までサイズ降順で返す。
+    LLM から任意パスや任意 shell command を指定することはできない。
+    """
+
+    container = _require_training_disk_service(service)
+    safe_limit = max(1, min(int(limit), 20))
+    LOGGER.info(
+        "list_large_files service=%s path=%s limit=%s",
+        service,
+        TRAINING_DISK_PATH,
+        safe_limit,
+    )
+
+    command = (
+        f"find '{TRAINING_DISK_PATH}' -type f -exec du -k {{}} + "
+        f"2>/dev/null | sort -nr | head -n {safe_limit}"
+    )
+    exit_code, output = container.exec_run(["sh", "-c", command])
+    text = output.decode("utf-8", errors="replace")
+
+    files: list[dict[str, Any]] = []
+    if exit_code == 0:
+        for line in text.splitlines():
+            size_text, separator, path = line.partition("\t")
+            if not separator:
+                parts = line.split(maxsplit=1)
+                if len(parts) != 2:
+                    continue
+                size_text, path = parts
+            try:
+                size_kb = int(size_text)
+            except ValueError:
+                continue
+            files.append({"path": path, "size_kb": size_kb})
+
+    return {
+        "service": service,
+        "path": TRAINING_DISK_PATH,
+        "files": files,
+        "command_exit_code": exit_code,
+    }
+
+
+@mcp.tool()
+def cleanup_training_logs(service: str = "tomcat") -> dict[str, Any]:
+    """人間の承認後、研修用 archive ディレクトリの古い模擬ログだけを削除する。
+
+    ディスクフルからの復旧用 mutation Tool。
+    削除対象は /training-disk/archive 直下の training-*.log に固定し、
+    active audit log や任意パスは削除できない。対象ファイル一覧と
+    cleanup 前後のディスク使用率を返す。
+    """
+
+    container = _require_training_disk_service(service)
+    before = _training_disk_usage(service)
+    LOGGER.warning(
+        "MUTATION cleanup_training_logs service=%s archive=%s",
+        service,
+        TRAINING_LOG_ARCHIVE_DIR,
+    )
+
+    find_command = (
+        f"find '{TRAINING_LOG_ARCHIVE_DIR}' -maxdepth 1 -type f "
+        "-name 'training-*.log' -print 2>/dev/null"
+    )
+    _, output = container.exec_run(["sh", "-c", find_command])
+    candidates = [
+        line.strip()
+        for line in output.decode("utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+
+    deleted: list[str] = []
+    failed: list[str] = []
+    allowed_prefix = TRAINING_LOG_ARCHIVE_DIR.rstrip("/") + "/training-"
+
+    for path in candidates:
+        if not path.startswith(allowed_prefix) or not path.endswith(".log"):
+            failed.append(path)
+            continue
+        exit_code, _ = container.exec_run(["rm", "-f", path])
+        if exit_code == 0:
+            deleted.append(path)
+        else:
+            failed.append(path)
+
+    after = _training_disk_usage(service)
+    return {
+        "action": "cleanup_training_logs",
+        "service": service,
+        "deleted_files": deleted,
+        "failed_files": failed,
+        "before": before,
+        "after": after,
     }
 
 
