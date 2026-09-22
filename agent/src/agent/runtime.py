@@ -209,7 +209,7 @@ class AgentRuntime:
 
         self.incident_latched = True
         await self.open_incident(
-            f"Health checker detected application failure. HTTP status={self.last_http_status!r}"
+            f"ヘルスチェックでアプリケーションの異常を検知しました。HTTP ステータス={self.last_http_status!r}"
         )
 
     async def open_incident(self, incident: str) -> None:
