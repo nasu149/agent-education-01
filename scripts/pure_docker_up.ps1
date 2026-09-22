@@ -48,6 +48,7 @@ $TomcatContainer = "agent-education-tomcat"
 $HttpdContainer = "agent-education-httpd"
 $AgentContainer = "agent-education-agent"
 $FaultContainer = "agent-education-fault-injector"
+$LockContainer = "agent-education-lock-injector"
 
 if ([string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
     throw "GEMINI_API_KEY is required. Set it in $RootDir\.env or use `$env:GEMINI_API_KEY='...'."
@@ -101,7 +102,7 @@ $LogLevel = if ($env:LOG_LEVEL) { $env:LOG_LEVEL } else { "INFO" }
 
 Push-Location $RootDir
 try {
-    foreach ($container in @($FaultContainer, $AgentContainer, $HttpdContainer, $TomcatContainer, $PostgresContainer)) {
+    foreach ($container in @($LockContainer, $FaultContainer, $AgentContainer, $HttpdContainer, $TomcatContainer, $PostgresContainer)) {
         [void](Invoke-DockerBestEffort @("rm", "-f", $container))
     }
 
@@ -196,7 +197,7 @@ try {
         "-e", "DB_ADMIN_NAME=memberdb",
         "-e", "DB_ADMIN_USER=postgres",
         "-e", "DB_ADMIN_PASSWORD=postgres",
-        "-e", "TERMINABLE_DB_APPLICATIONS=fault-injector",
+        "-e", "TERMINABLE_DB_APPLICATIONS=fault-injector,fault-locker",
         "-e", "FAULT_DB_USER=fault_injector",
         "-e", "HEALTH_CHECK_INTERVAL_SECONDS=$HealthCheckInterval",
         "-e", "MONITOR_STARTUP_GRACE_SECONDS=$MonitorStartupGrace",
@@ -215,8 +216,9 @@ try {
     Write-Host "Agent log / LangGraph State updates:"
     Write-Host "  docker logs -f agent-education-agent"
     Write-Host ""
-    Write-Host "Inject the incident with:"
+    Write-Host "Inject an incident with:"
     Write-Host "  .\scripts\inject_db_connection_exhaustion.ps1"
+    Write-Host "  .\scripts\inject_db_lock.ps1"
 }
 finally {
     Pop-Location
