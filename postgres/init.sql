@@ -25,3 +25,8 @@ INSERT INTO members (name, department, email) VALUES
     ('佐藤 花子', '開発部', 'sato@example.local'),
     ('鈴木 一郎', '人事部', 'suzuki@example.local')
 ON CONFLICT (email) DO NOTHING;
+
+
+-- Training-only fault injector privileges.
+-- UPDATE privilege is enough for LOCK TABLE ... ACCESS EXCLUSIVE in PostgreSQL.
+GRANT SELECT, UPDATE ON TABLE members TO fault_injector;
