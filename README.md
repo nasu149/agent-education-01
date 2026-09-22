@@ -62,8 +62,18 @@ Team C Agent
 ## 新人が主に編集する場所
 
 ```text
-agent/src/agent/graph.py
+agent/src/agent/nodes.py   # TODO 1〜4: Prompt / investigate / judge / approval
+agent/src/agent/graph.py   # TODO 5: Node / Edge の配線
 ```
+
+役割を分けています。
+
+```text
+nodes.py = 各 Node が「何をするか」
+graph.py = 各 Node を「どう繋ぐか」
+```
+
+`graph.py` を開けば LangGraph の全体構造だけを追えるようにしています。
 
 開始時点は安全な placeholder Graph です。
 
