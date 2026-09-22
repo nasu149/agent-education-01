@@ -1,3 +1,7 @@
+> **このブランチ `training/db-disk-full-solution` は講師用模範解答です。**  
+> `training/db-disk-full` のTODO・placeholderを残したまま、回答コードだけを追記しています。  
+> branch diffで受講者が追加する実装をそのまま確認できます。
+
 # AI Agent研修 - DB Disk Full 拡張課題
 
 > **このブランチ `training/db-disk-full` は受講者向けの問題版です。**
