@@ -37,11 +37,13 @@ MONITOR_STARTUP_GRACE_SECONDS="${MONITOR_STARTUP_GRACE_SECONDS:-20}"
 FAILURE_THRESHOLD="${FAILURE_THRESHOLD:-2}"
 MAX_INVESTIGATION_TOOL_RESULTS="${MAX_INVESTIGATION_TOOL_RESULTS:-8}"
 VERIFY_RETRY_LIMIT="${VERIFY_RETRY_LIMIT:-1}"
+TRAINING_DISK_SIZE="${TRAINING_DISK_SIZE:-16m}"
 
 echo "==> Gemini model: $GEMINI_MODEL"
 echo "==> Gemini timeout: ${GEMINI_TIMEOUT_SECONDS}s"
 echo "==> Health check: every ${HEALTH_CHECK_INTERVAL_SECONDS}s, startup grace ${MONITOR_STARTUP_GRACE_SECONDS}s, failure threshold ${FAILURE_THRESHOLD}"
 echo "==> LangGraph console print mode: $LANGGRAPH_PRINT_MODE"
+echo "==> Training disk size: $TRAINING_DISK_SIZE"
 
 cd "$ROOT_DIR"
 
@@ -98,6 +100,8 @@ docker run -d \
   -e DB_NAME=memberdb \
   -e DB_USER=memberapp \
   -e DB_PASSWORD=memberapp \
+  -e AUDIT_LOG_PATH=/training-disk/audit/member-audit.log \
+  --tmpfs "/training-disk:rw,size=$TRAINING_DISK_SIZE,mode=1777" \
   agent-education-tomcat \
   >/dev/null
 
