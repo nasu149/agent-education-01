@@ -3,6 +3,7 @@ set -euo pipefail
 
 AGENT_CONTAINER="agent-education-agent"
 FAULT_CONTAINER="agent-education-fault-injector"
+LOCK_CONTAINER="agent-education-lock-injector"
 HTTPD_CONTAINER="agent-education-httpd"
 TOMCAT_CONTAINER="agent-education-tomcat"
 POSTGRES_CONTAINER="agent-education-postgres"
@@ -10,8 +11,9 @@ POSTGRES_CONTAINER="agent-education-postgres"
 echo "==> Stopping current Agent so it cannot interfere with reset"
 docker rm -f "$AGENT_CONTAINER" >/dev/null 2>&1 || true
 
-echo "==> Removing fault injector"
+echo "==> Removing fault injectors"
 docker rm -f "$FAULT_CONTAINER" >/dev/null 2>&1 || true
+docker rm -f "$LOCK_CONTAINER" >/dev/null 2>&1 || true
 
 echo "==> Restoring service containers"
 for container in "$POSTGRES_CONTAINER" "$TOMCAT_CONTAINER" "$HTTPD_CONTAINER"; do
