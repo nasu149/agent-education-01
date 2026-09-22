@@ -268,3 +268,81 @@ Round 3: proxy-port
 - 障害の答えの hard-code
 
 「何でもできるAgent」ではなく、**権限を限定した上で適切に判断できるAgent**を作る研修です。
+
+
+## Experimental fault: db-lock
+
+このブランチ `experiment/db-lock` では、PostgreSQL の lock wait を使った障害を追加しています。
+
+### 障害注入
+
+Plain Docker / Battle:
+
+~~~bash
+./scripts/battle_inject_fault.sh db-lock
+~~~
+
+または直接:
+
+~~~bash
+./scripts/inject_db_lock.sh
+~~~
+
+Docker Compose:
+
+~~~bash
+./scripts/inject_fault.sh db-lock
+~~~
+
+### 何が起きるか
+
+`fault-locker` が PostgreSQL に接続し、トランザクション内で
+
+~~~sql
+LOCK TABLE members IN ACCESS EXCLUSIVE MODE;
+~~~
+
+を保持します。
+
+そのため、
+
+~~~text
+httpd      running
+Tomcat     running
+PostgreSQL running
+DB接続     可能
+~~~
+
+でも、`GET /api/members` の SELECT が lock wait になり、HTTP がタイムアウトします。
+
+### Agent の期待フロー
+
+~~~text
+HTTP timeout
+  ↓
+list_containers
+  ↓
+全コンテナ running
+  ↓
+PostgreSQL は接続可能
+  ↓
+get_postgres_lock_summary
+  ↓
+blocked application: member app
+blocker application: fault-locker
+blocker state: idle in transaction
+  ↓
+Diagnosis
+  recommended_action = terminate_postgres_connections
+  target_application = fault-locker
+  ↓
+Human Approval
+  ↓
+terminate_postgres_connections("fault-locker")
+  ↓
+PostgreSQL が transaction rollback / lock解放
+  ↓
+verify GET /api/members = HTTP 200
+~~~
+
+`get_postgres_lock_summary` は固定 SQL の read-only Tool です。LLM に任意 SQL 実行権限は与えていません。
