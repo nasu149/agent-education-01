@@ -131,11 +131,18 @@ HTTP で再確認
 - 復旧後の HTTP verify 処理
 - 最終 report 処理
 
-新人の主な編集対象は次の1ファイルです。
+新人の主な編集対象は次の2ファイルです。
 
 ```text
+agent/src/agent/nodes.py
 agent/src/agent/graph.py
 ```
+
+`nodes.py` には State / Prompt / 各 Node の処理を置き、
+`graph.py` は Node / Edge の配線だけにしています。
+
+これにより、LangGraph の全体像を学ぶときに巨大な `build_graph()` を読む必要がなく、
+「Node の中身」と「Graph の構造」を分けて理解できます。
 
 ---
 
