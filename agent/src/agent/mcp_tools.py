@@ -22,12 +22,17 @@ READ_ONLY_TOOL_NAMES = {
     "get_container_logs",
     "read_config",
     "get_postgres_connection_summary",
+    # ===== 模範解答（TODO E4）=====
+    "get_postgres_training_disk_usage",
+    "list_postgres_training_disk_files",
     # TODO E4: DB disk-full の read-only Tool をここへ登録する
 }
 MUTATING_TOOL_NAMES = {
     "start_container",
     "restart_container",
     "terminate_postgres_connections",
+    # ===== 模範解答（TODO E4）=====
+    "cleanup_postgres_training_exports",
     # TODO E4: DB disk-full の mutation Tool をここへ登録する
 }
 
