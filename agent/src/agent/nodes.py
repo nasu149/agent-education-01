@@ -68,6 +68,7 @@ class IncidentState(TypedDict):
 # - 特定の競技問題だけを直接判定する hard-code
 #
 # 下は最低限動く baseline。チームごとに改善してよい。
+# TODO D5: disk-full の兆候を見たとき、追加した観測 Tool を選べるよう Prompt を拡張する。
 INVESTIGATION_SYSTEM_PROMPT = """\
 あなたは、次の構成の研修用 Web システムで障害の初動調査を担当します。
 ブラウザー -> httpd -> Tomcat -> PostgreSQL。
@@ -85,6 +86,7 @@ DB プロセス自体が停止していると決めつけず、PostgreSQL の接
 """
 
 
+# TODO D5: cleanup_training_logs を判断候補へ追加し、観測事実に基づく選択条件を書く。
 JUDGE_SYSTEM_PROMPT = """\
 あなたは、障害対応ワークフローの判断段階を担当します。
 これまでに収集した会話とツールの実行結果だけを使ってください。
@@ -308,6 +310,7 @@ class IncidentNodes:
             "start_container",
             "restart_container",
             "terminate_postgres_connections",
+            # TODO D5: cleanup_training_logs を Human Approval に進める
         }:
             return "approval"
         return "report"
