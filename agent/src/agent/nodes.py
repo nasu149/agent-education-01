@@ -27,6 +27,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from agent.config import Settings
+from agent.health_probe import synthetic_write_probe
 from agent.mcp_tools import ToolCatalog
 from agent.models import ApprovalRequest, Diagnosis
 
@@ -407,19 +408,18 @@ class IncidentNodes:
     # verify は講師側で完成済み
     # ------------------------------------------------------------------
     async def verify(self, state: IncidentState) -> dict:
-        """状態変更後、ユーザー視点の HTTP で本当に直ったか再観測する。"""
+        """状態変更後、既存 CRUD API の実書き込みで本当に直ったか再観測する。"""
         self.emit_state("verify", state)
-        http_tool = self.read_tools["http_request"]
         last_result = None
 
         for attempt in range(1, 7):
-            last_result = await http_tool.ainvoke(
-                {"path": "/api/members", "method": "GET"}
+            last_result = await synthetic_write_probe(self.settings.app_base_url)
+            self.emit_event(
+                "INFO",
+                f"Verification attempt {attempt}/6: synthetic_write_probe={last_result}",
             )
-            status = status_code(last_result)
-            self.emit_event("INFO", f"Verification attempt {attempt}/6: HTTP {status}")
 
-            if status == 200:
+            if last_result.get("healthy"):
                 return {
                     "verification": {
                         "success": True,
@@ -439,8 +439,8 @@ class IncidentNodes:
             "messages": [
                 HumanMessage(
                     content=(
-                        "承認された復旧操作を実行しましたが、復旧確認には引き続き失敗しています。"
-                        f"最新の観測結果: {last_result}。"
+                        "承認された復旧操作を実行しましたが、書き込みを含む復旧確認に失敗しています。"
+                        f"最新の synthetic write probe: {last_result}。"
                         "現在の環境を再調査してください。"
                     )
                 )
@@ -478,7 +478,7 @@ class IncidentNodes:
             if state["approval"] == "rejected":
                 outcome = "復旧操作は人間に却下されたため実行していません。"
             elif verification and verification.get("success"):
-                outcome = "承認された復旧操作を実行し、HTTP 200で復旧を確認しました。"
+                outcome = "承認された復旧操作を実行し、synthetic write probeで復旧を確認しました。"
             elif diagnosis.recommended_action == "manual":
                 outcome = (
                     "Agentの許可された操作範囲では復旧できないため、"
