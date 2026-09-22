@@ -22,9 +22,17 @@ docker exec "$TOMCAT_CONTAINER" df -h "$TRAINING_DISK"
 
 echo "==> Simulating overnight audit-log growth"
 docker exec "$TOMCAT_CONTAINER" sh -c "
-  mkdir -p '$ARCHIVE_DIR'
+  mkdir -p '$ARCHIVE_DIR' '$TRAINING_DISK/audit'
+  # Fill the current audit file's allocated block so the next request needs
+  # another filesystem block instead of using slack space in the existing one.
+  dd if=/dev/zero of='$TRAINING_DISK/audit/member-audit.log' bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
+
   rm -f '$FILLER'
+  # Fill in large chunks first, then progressively smaller chunks so tmpfs
+  # has no usable space left for the next audit append.
   dd if=/dev/zero of='$FILLER' bs=1M count=128 status=none 2>/dev/null || true
+  dd if=/dev/zero of='$FILLER' bs=1K count=2048 oflag=append conv=notrunc status=none 2>/dev/null || true
+  dd if=/dev/zero of='$FILLER' bs=1 count=8192 oflag=append conv=notrunc status=none 2>/dev/null || true
 "
 
 usage=$(docker exec "$TOMCAT_CONTAINER" df -Pk "$TRAINING_DISK" | awk 'NR==2 {gsub(/%/, "", $5); print $5}')
