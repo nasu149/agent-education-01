@@ -34,6 +34,9 @@ services:
       DB_NAME: memberdb
       DB_USER: memberapp
       DB_PASSWORD: memberapp
+      AUDIT_LOG_PATH: /training-disk/audit/member-audit.log
+    tmpfs:
+      - /training-disk:size=16m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
