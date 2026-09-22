@@ -22,9 +22,12 @@ case "$FAULT" in
     ;;
   disk-full)
     docker compose exec -T tomcat sh -c "
-      mkdir -p /training-disk/archive
+      mkdir -p /training-disk/archive /training-disk/audit
+      dd if=/dev/zero of=/training-disk/audit/member-audit.log bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
       rm -f /training-disk/archive/training-old-audit.log
       dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1M count=128 status=none 2>/dev/null || true
+      dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1K count=2048 oflag=append conv=notrunc status=none 2>/dev/null || true
+      dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1 count=8192 oflag=append conv=notrunc status=none 2>/dev/null || true
     "
     ;;
   *)
