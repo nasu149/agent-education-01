@@ -78,6 +78,8 @@ INVESTIGATION_SYSTEM_PROMPT = """\
 可能な限り、複数の観測結果を照らし合わせてから結論を出してください。
 PostgreSQL が稼働中なのにアプリケーションログがデータベース接続の問題を示す場合は、
 DB プロセス自体が停止していると決めつけず、PostgreSQL の接続状態を確認してください。
+また、HTTP がタイムアウトし、すべてのコンテナが running で PostgreSQL への接続も可能な場合は、
+SQL が lock wait で止まっていないか PostgreSQL の lock 状態も確認してください。
 障害を診断するのに十分な証拠が集まったら、ツールの呼び出しを止め、
 調査結果を簡潔にまとめてください。
 状態を変更するツールの実行を求めたり、ツールの出力を捏造したりしないでください。
@@ -102,7 +104,7 @@ recommended_action は次のいずれかを選んでください。
 start_container は、対象コンテナが停止・終了していると観測された場合にだけ選んでください。
 restart_container は、稼働中のサービスに明らかに再起動が必要な場合にだけ選んでください。
 terminate_postgres_connections は、特定の application_name による異常な PostgreSQL
-セッションが観測された場合にだけ選んでください。
+セッション、または他の処理を block している PostgreSQL session が観測された場合にだけ選んでください。
 terminate_postgres_connections では、観測された application_name を正確に指定してください。
 
 復旧に設定変更、認証情報の修正、または許可された状態変更ツールの範囲外の操作が
