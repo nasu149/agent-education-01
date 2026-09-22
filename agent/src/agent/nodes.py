@@ -78,6 +78,9 @@ INVESTIGATION_SYSTEM_PROMPT = """\
 可能な限り、複数の観測結果を照らし合わせてから結論を出してください。
 PostgreSQL が稼働中なのにアプリケーションログがデータベース接続の問題を示す場合は、
 DB プロセス自体が停止していると決めつけず、PostgreSQL の接続状態を確認してください。
+Tomcat ログや HTTP 応答に "No space left on device"、"audit storage unavailable"、
+"audit_write_failed" などのファイル書き込み失敗がある場合は、
+研修用ディスクの使用率と大きなファイルを確認してください。
 障害を診断するのに十分な証拠が集まったら、ツールの呼び出しを止め、
 調査結果を簡潔にまとめてください。
 状態を変更するツールの実行を求めたり、ツールの出力を捏造したりしないでください。
@@ -96,6 +99,7 @@ recommended_action は次のいずれかを選んでください。
 - start_container
 - restart_container
 - terminate_postgres_connections
+- cleanup_training_logs
 - manual
 - none
 
@@ -104,6 +108,9 @@ restart_container は、稼働中のサービスに明らかに再起動が必�
 terminate_postgres_connections は、特定の application_name による異常な PostgreSQL
 セッションが観測された場合にだけ選んでください。
 terminate_postgres_connections では、観測された application_name を正確に指定してください。
+cleanup_training_logs は、Tomcat の /training-disk が高使用率で、
+list_large_files に /training-disk/archive/training-*.log が容量を占有していることが
+観測された場合にだけ選んでください。その場合 target_service は tomcat にしてください。
 
 復旧に設定変更、認証情報の修正、または許可された状態変更ツールの範囲外の操作が
 必要な場合は、manual を選んでください。
@@ -308,6 +315,7 @@ class IncidentNodes:
             "start_container",
             "restart_container",
             "terminate_postgres_connections",
+            "cleanup_training_logs",
         }:
             return "approval"
         return "report"
