@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution"]
+    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution", "experiment/disk-full"]
   pull_request:
 
 jobs:
@@ -215,6 +215,146 @@ jobs:
           recovered=0
           for _ in $(seq 1 40); do
             if curl -fsS http://localhost:8088/api/members >/dev/null 2>&1; then
+              recovered=1
+              break
+            fi
+            sleep 1
+          done
+          test "$recovered" -eq 1
+
+
+  disk-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - name: Start application with bounded Tomcat training disk
+        run: docker compose up -d --build postgres tomcat httpd
+      - name: Verify disk-full incident and real MCP remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            code=$?
+            trap - EXIT
+            if [ "$code" -ne 0 ]; then
+              echo "===== compose ps ====="
+              docker compose ps || true
+              echo "===== training disk ====="
+              docker compose exec -T tomcat df -h /training-disk || true
+              echo "===== training disk files ====="
+              docker compose exec -T tomcat sh -c 'du -ak /training-disk 2>/dev/null | sort -nr | head -20' || true
+              echo "===== tomcat logs ====="
+              docker compose logs --no-color tomcat || true
+            fi
+            docker compose down -v --remove-orphans || true
+            exit "$code"
+          }
+          trap cleanup EXIT
+
+          echo "Waiting for healthy application..."
+          healthy=0
+          for _ in $(seq 1 40); do
+            if curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          test "$healthy" -eq 1
+
+          echo "Checking the bounded training filesystem..."
+          docker compose exec -T tomcat df -h /training-disk
+          size_kb=$(docker compose exec -T tomcat df -Pk /training-disk | awk 'NR==2 {print $2}')
+          echo "training disk size_kb=$size_kb"
+          test "$size_kb" -ge 12000
+          test "$size_kb" -le 20000
+
+          echo "Simulating overnight log growth until the training disk is full..."
+          docker compose exec -T tomcat sh -c '
+            mkdir -p /training-disk/archive
+            rm -f /training-disk/archive/training-old-audit.log
+            dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1M count=128 status=none 2>/dev/null || true
+          '
+
+          use_percent=$(docker compose exec -T tomcat df -Pk /training-disk | awk 'NR==2 {gsub(/%/, "", $5); print $5}')
+          echo "training disk use_percent=$use_percent"
+          test "$use_percent" -ge 95
+
+          echo "Application should now fail while all containers remain running..."
+          status=$(curl -sS --max-time 5 -o /tmp/disk-full.json -w '%{http_code}'             http://localhost:8088/api/members || true)
+          echo "HTTP status=$status"
+          cat /tmp/disk-full.json || true
+          test "$status" != "200"
+          grep -q 'audit storage unavailable' /tmp/disk-full.json
+
+          for service in postgres tomcat httpd; do
+            docker compose ps --status running --services | grep -qx "$service"
+          done
+
+          echo "Tomcat should expose a useful disk-full clue..."
+          docker compose logs --no-color tomcat | grep -E 'audit_write_failed|No space left on device'
+
+          echo "Building Agent image and invoking real read-only disk tools..."
+          docker compose build agent
+          observation=$(
+            docker compose run --rm --no-deps -T agent python - <<'PY'
+          import asyncio
+
+          from agent.mcp_tools import load_tool_catalog
+
+
+          async def main():
+              catalog = await load_tool_catalog()
+              by_name = {tool.name: tool for tool in catalog.read_only}
+
+              usage = await by_name["get_disk_usage"].ainvoke({"service": "tomcat"})
+              files = await by_name["list_large_files"].ainvoke(
+                  {"service": "tomcat", "limit": 10}
+              )
+              print("DISK_USAGE", usage)
+              print("LARGE_FILES", files)
+
+
+          asyncio.run(main())
+          PY
+          )
+          echo "$observation"
+          echo "$observation" | grep -q 'training-old-audit.log'
+
+          echo "Applying the same approved cleanup mutation the Graph would execute..."
+          docker compose run --rm --no-deps -T agent python - <<'PY'
+          import asyncio
+
+          from agent.mcp_tools import load_tool_catalog
+
+
+          async def main():
+              catalog = await load_tool_catalog()
+              result = await catalog.mutating["cleanup_training_logs"].ainvoke(
+                  {"service": "tomcat"}
+              )
+              print("MCP cleanup result:", result)
+
+
+          asyncio.run(main())
+          PY
+
+          test ! -e /tmp/never-used
+          if docker compose exec -T tomcat test -e /training-disk/archive/training-old-audit.log; then
+            echo "Expected training-old-audit.log to be deleted." >&2
+            exit 1
+          fi
+
+          after_percent=$(docker compose exec -T tomcat df -Pk /training-disk | awk 'NR==2 {gsub(/%/, "", $5); print $5}')
+          echo "training disk use_percent after cleanup=$after_percent"
+          test "$after_percent" -lt 50
+
+          echo "Application should recover after old training logs are removed..."
+          recovered=0
+          for _ in $(seq 1 40); do
+            if curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null 2>&1; then
               recovered=1
               break
             fi
