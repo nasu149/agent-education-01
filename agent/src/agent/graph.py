@@ -107,6 +107,56 @@ def build_graph(
     # - MCP Server / fault injector を競技用に改造する
     # - 障害の答えを hard-code する
     #
+    # ===== 模範解答（TODO 5）=====
+    builder = StateGraph(IncidentState)
+
+    builder.add_node("investigate", nodes.investigate)
+    builder.add_node("tools", nodes.tools)
+    builder.add_node("judge", nodes.judge)
+    builder.add_node("approval", nodes.approval)
+    builder.add_node("remediate", nodes.remediate)
+    builder.add_node("verify", nodes.verify)
+    builder.add_node("report", nodes.report)
+
+    builder.add_edge(START, "investigate")
+    builder.add_conditional_edges(
+        "investigate",
+        _route_after_investigate,
+        {
+            "tools": "tools",
+            "judge": "judge",
+        },
+    )
+    builder.add_edge("tools", "investigate")
+    builder.add_conditional_edges(
+        "judge",
+        nodes.after_judge,
+        {
+            "approval": "approval",
+            "report": "report",
+        },
+    )
+    builder.add_conditional_edges(
+        "approval",
+        nodes.after_approval,
+        {
+            "remediate": "remediate",
+            "report": "report",
+        },
+    )
+    builder.add_edge("remediate", "verify")
+    builder.add_conditional_edges(
+        "verify",
+        nodes.after_verify,
+        {
+            "investigate": "investigate",
+            "report": "report",
+        },
+    )
+    builder.add_edge("report", END)
+
+    return builder.compile(checkpointer=InMemorySaver())
+
     builder = StateGraph(IncidentState)
     builder.add_node("starter", nodes.starter_placeholder)
     builder.add_edge(START, "starter")
