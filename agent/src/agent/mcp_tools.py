@@ -22,6 +22,7 @@ READ_ONLY_TOOL_NAMES = {
     "get_container_logs",
     "read_config",
     "get_postgres_connection_summary",
+    "get_postgres_lock_summary",
 }
 MUTATING_TOOL_NAMES = {
     "start_container",
