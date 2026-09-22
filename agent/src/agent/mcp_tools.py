@@ -22,11 +22,14 @@ READ_ONLY_TOOL_NAMES = {
     "get_container_logs",
     "read_config",
     "get_postgres_connection_summary",
+    "get_disk_usage",
+    "list_large_files",
 }
 MUTATING_TOOL_NAMES = {
     "start_container",
     "restart_container",
     "terminate_postgres_connections",
+    "cleanup_training_logs",
 }
 
 
