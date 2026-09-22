@@ -16,7 +16,7 @@ class Diagnosis(BaseModel):
 
     root_cause は具体的な推定原因、evidence はそれを裏付ける観測事実の一覧。
     recommended_action は提案する最小限の復旧操作で、起動・再起動・DB 接続の切断・
-    手動対応・操作不要のいずれかを選ぶ。target_service に対象サービスを指定し、
+    研修用ログの削除・手動対応・操作不要のいずれかを選ぶ。target_service に対象サービスを指定し、
     DB 接続を切断する場合は target_application に観測した application_name を入れる。
     それ以外の操作では target_application を 'none' にする。
 
@@ -33,6 +33,7 @@ class Diagnosis(BaseModel):
         "start_container",
         "restart_container",
         "terminate_postgres_connections",
+        "cleanup_training_logs",
         "manual",
         "none",
     ] = Field(description="この Agent が実行できる、安全かつ最小限の復旧操作。")
