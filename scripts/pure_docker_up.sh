@@ -37,11 +37,13 @@ MONITOR_STARTUP_GRACE_SECONDS="${MONITOR_STARTUP_GRACE_SECONDS:-20}"
 FAILURE_THRESHOLD="${FAILURE_THRESHOLD:-2}"
 MAX_INVESTIGATION_TOOL_RESULTS="${MAX_INVESTIGATION_TOOL_RESULTS:-8}"
 VERIFY_RETRY_LIMIT="${VERIFY_RETRY_LIMIT:-1}"
+TRAINING_DB_DISK_SIZE="${TRAINING_DB_DISK_SIZE:-32m}"
 
 echo "==> Gemini model: $GEMINI_MODEL"
 echo "==> Gemini timeout: ${GEMINI_TIMEOUT_SECONDS}s"
 echo "==> Health check: every ${HEALTH_CHECK_INTERVAL_SECONDS}s, startup grace ${MONITOR_STARTUP_GRACE_SECONDS}s, failure threshold ${FAILURE_THRESHOLD}"
 echo "==> LangGraph console print mode: $LANGGRAPH_PRINT_MODE"
+echo "==> PostgreSQL training disk size: $TRAINING_DB_DISK_SIZE"
 
 cd "$ROOT_DIR"
 
@@ -76,6 +78,7 @@ docker run -d \
   -e APP_DB_PASSWORD=memberapp \
   -e FAULT_DB_PASSWORD=fault_injector \
   -v "$VOLUME:/var/lib/postgresql/data" \
+  --tmpfs "/training-disk:rw,size=$TRAINING_DB_DISK_SIZE,mode=1777" \
   agent-education-postgres \
   postgres -c max_connections=20 -c superuser_reserved_connections=3 \
   >/dev/null
@@ -87,6 +90,22 @@ for _ in $(seq 1 40); do
   sleep 1
 done
 docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d memberdb >/dev/null
+
+echo "==> Preparing PostgreSQL training tablespace"
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -d memberdb -v ON_ERROR_STOP=0 -c "
+  DROP TRIGGER IF EXISTS training_member_insert_audit ON members;
+  DROP FUNCTION IF EXISTS training_capture_member_insert();
+  DROP TABLE IF EXISTS training_write_audit;
+" >/dev/null 2>&1 || true
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -d memberdb -v ON_ERROR_STOP=0   -c "DROP TABLESPACE IF EXISTS training_disk_ts;" >/dev/null 2>&1 || true
+docker exec "$POSTGRES_CONTAINER" sh -c "
+  rm -rf /training-disk/pgspace
+  mkdir -p /training-disk/pgspace /training-disk/archive
+  chown postgres:postgres /training-disk/pgspace /training-disk/archive
+  chmod 700 /training-disk/pgspace
+  chmod 755 /training-disk/archive
+"
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d memberdb   < postgres/training_disk_setup.sql
 
 echo "==> Starting Tomcat"
 docker run -d \
@@ -152,3 +171,4 @@ echo "  docker logs -f agent-education-agent"
 echo
 echo "Inject the incident with:"
 echo "  ./scripts/inject_db_connection_exhaustion.sh"
+echo "  ./scripts/inject_db_disk_full.sh"
