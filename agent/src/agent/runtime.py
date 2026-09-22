@@ -14,13 +14,13 @@ import time
 import uuid
 from typing import Any
 
-import httpx
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.types import Command
 from pydantic import BaseModel
 
 from agent.config import Settings
 from agent.graph import build_graph
+from agent.health_probe import synthetic_write_probe
 from agent.mcp_tools import load_tool_catalog
 
 LOGGER = logging.getLogger(__name__)
@@ -55,6 +55,7 @@ class AgentRuntime:
         self.consecutive_failures = 0
         self.healthy = False
         self.last_http_status: int | None = None
+        self.last_health_probe: dict[str, Any] | None = None
         self.active_incident_id: str | None = None
         self.active_config: dict[str, Any] | None = None
         self.pending_approval: dict[str, Any] | None = None
@@ -167,28 +168,24 @@ class AgentRuntime:
             await self._health_tick()
 
     async def _health_tick(self) -> None:
-        """HTTP 監視を 1 回行い、必要な場合だけ障害対応を開始する。
+        """既存 CRUD API で synthetic write probe を行い、必要なら障害対応を開始する。
 
-        /api/members の HTTP 200 を正常とし、別のステータスや通信エラーを失敗とする。
+        GET が成功するだけでは「読み取り可能」しか確認できないため、研修では既存の
+        POST /api/members と DELETE /api/members/{id} を使い、実際の DB 書き込みまで
+        正常か確認する。Java アプリ自体には監視専用コードを追加しない。
+
         正常なら連続失敗回数をゼロに戻す。異常なら回数を増やし、起動猶予時間と
         連続失敗のしきい値を両方満たした時点で open_incident() を呼ぶ。
-
-        incident_latched は、同じ障害を監視のたびに起票しないためのフラグ。
-        既に起票済み・対応中なら新規起票を抑制し、対応終了後に正常応答が得られると
-        フラグを解除する。このメソッドの判断には LLM を使わない。
+        この正常・異常判定には LLM を使わない。
         """
-        try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
-                response = await client.get(f"{self.settings.app_base_url}/api/members")
-                self.last_http_status = response.status_code
-                current_healthy = response.status_code == 200
-        except httpx.HTTPError:
-            self.last_http_status = None
-            current_healthy = False
+        probe = await synthetic_write_probe(self.settings.app_base_url)
+        self.last_health_probe = probe
+        self.last_http_status = probe.get("status_code")
+        current_healthy = bool(probe.get("healthy"))
 
         if current_healthy:
             if not self.healthy:
-                self.event("INFO", "Health check: OK")
+                self.event("INFO", "Synthetic write health check: OK")
             self.healthy = True
             self.consecutive_failures = 0
             if self.incident_latched and self.active_incident_id is None:
@@ -202,14 +199,18 @@ class AgentRuntime:
         if time.monotonic() - self.started_at < self.settings.monitor_startup_grace_seconds:
             return
         if self.consecutive_failures < self.settings.failure_threshold:
-            self.event("WARN", f"Health check failed ({self.consecutive_failures}/{self.settings.failure_threshold})")
+            self.event(
+                "WARN",
+                f"Synthetic write health check failed ({self.consecutive_failures}/{self.settings.failure_threshold}): {probe}",
+            )
             return
         if self.incident_latched or self.active_incident_id:
             return
 
         self.incident_latched = True
         await self.open_incident(
-            f"ヘルスチェックでアプリケーションの異常を検知しました。HTTP ステータス={self.last_http_status!r}"
+            "synthetic write health check でアプリケーションの書き込み異常を検知しました。"
+            f"観測結果={probe}"
         )
 
     async def open_incident(self, incident: str) -> None:
@@ -334,6 +335,7 @@ class AgentRuntime:
         return {
             "healthy": self.healthy,
             "last_http_status": self.last_http_status,
+            "last_health_probe": self.last_health_probe,
             "monitoring": {
                 "health_check_interval_seconds": self.settings.health_check_interval_seconds,
                 "startup_grace_seconds": self.settings.monitor_startup_grace_seconds,
