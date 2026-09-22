@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution"]
+    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution", "training/disk-full", "training/disk-full-solution"]
   pull_request:
 
 jobs:
@@ -221,3 +221,74 @@ jobs:
             sleep 1
           done
           test "$recovered" -eq 1
+
+
+  disk-full-infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - name: Start application with bounded Tomcat training disk
+        run: docker compose up -d --build postgres tomcat httpd
+      - name: Verify disk-full fault injection
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker compose down -v --remove-orphans || true' EXIT
+
+          for _ in $(seq 1 40); do
+            if curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null
+
+          docker compose exec -T tomcat sh -c '
+            mkdir -p /training-disk/archive /training-disk/audit
+            dd if=/dev/zero of=/training-disk/audit/member-audit.log bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
+            rm -f /training-disk/archive/training-old-audit.log
+            dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1M count=128 status=none 2>/dev/null || true
+            dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1K count=2048 oflag=append conv=notrunc status=none 2>/dev/null || true
+            dd if=/dev/zero of=/training-disk/archive/training-old-audit.log bs=1 count=8192 oflag=append conv=notrunc status=none 2>/dev/null || true
+          '
+
+          use_percent=$(docker compose exec -T tomcat df -Pk /training-disk | awk 'NR==2 {gsub(/%/, "", $5); print $5}')
+          echo "training disk use_percent=$use_percent"
+          test "$use_percent" -ge 95
+
+          status=$(curl -sS --max-time 5 -o /tmp/disk-full.json -w '%{http_code}' http://localhost:8088/api/members || true)
+          echo "HTTP status=$status"
+          cat /tmp/disk-full.json || true
+          test "$status" = "500"
+          grep -q 'audit storage unavailable' /tmp/disk-full.json
+          docker compose logs --no-color tomcat | grep -E 'audit_write_failed|No space left on device'
+
+  powershell-disk-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell helper scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            "scripts/prepare_disk_full_training.ps1",
+            "scripts/inject_disk_full.ps1",
+            "scripts/battle_inject_fault.ps1",
+            "scripts/battle_reset.ps1",
+            "scripts/pure_docker_up.ps1",
+            "scripts/inject_fault.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Host $_.Message -ForegroundColor Red }
+              exit 1
+            }
+          }
