@@ -368,7 +368,7 @@ LLM の揺らぎを理由に、速度を主評価にしないこと。
 
 - `catalog.mutating` を `bind_tools` している
 - interrupt 前に mutation
-- subprocess / docker CLI を graph.py から直接呼ぶ
+- subprocess / docker CLI を graph.py / nodes.py から直接呼ぶ
 - 任意 SQL
 - MCP server 改造
 - fault injection 改造
@@ -397,7 +397,7 @@ LLM の response に tool_calls がある場合、次はどの Node ですか？
 ### Hint 3
 
 ```text
-investigator_llm は既に read-only Tool を bind 済みです。
+self.investigator_llm は nodes.py の __init__ で read-only Tool を bind 済みです。
 ```
 
 ### Hint 4
