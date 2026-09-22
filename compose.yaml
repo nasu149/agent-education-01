@@ -19,6 +19,10 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./postgres/02-set-role-passwords.sh:/docker-entrypoint-initdb.d/02-set-role-passwords.sh:ro
+      - ./postgres/training_disk_setup.sql:/docker-entrypoint-initdb.d/03-training-disk.sql:ro
+      - ./postgres/03-setup-training-disk.sh:/docker-entrypoint-initdb.d/03-setup-training-disk.sh:ro
+    tmpfs:
+      - /training-disk:size=32m,mode=1777
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d memberdb"]
       interval: 3s
