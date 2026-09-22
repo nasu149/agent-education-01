@@ -91,6 +91,7 @@ if ($GeminiModel -eq "gemini-2.5-flash-lite") {
 $LangGraphPrintMode = if ($env:LANGGRAPH_PRINT_MODE) { $env:LANGGRAPH_PRINT_MODE } else { "updates" }
 Write-Host "==> Gemini model: $GeminiModel"
 Write-Host "==> LangGraph console print mode: $LangGraphPrintMode"
+Write-Host "==> Training disk size: $TrainingDiskSize"
 
 $HealthCheckInterval = if ($env:HEALTH_CHECK_INTERVAL_SECONDS) { $env:HEALTH_CHECK_INTERVAL_SECONDS } else { "5" }
 $MonitorStartupGrace = if ($env:MONITOR_STARTUP_GRACE_SECONDS) { $env:MONITOR_STARTUP_GRACE_SECONDS } else { "20" }
@@ -98,6 +99,7 @@ $FailureThreshold = if ($env:FAILURE_THRESHOLD) { $env:FAILURE_THRESHOLD } else 
 $MaxInvestigationToolResults = if ($env:MAX_INVESTIGATION_TOOL_RESULTS) { $env:MAX_INVESTIGATION_TOOL_RESULTS } else { "8" }
 $VerifyRetryLimit = if ($env:VERIFY_RETRY_LIMIT) { $env:VERIFY_RETRY_LIMIT } else { "1" }
 $LogLevel = if ($env:LOG_LEVEL) { $env:LOG_LEVEL } else { "INFO" }
+$TrainingDiskSize = if ($env:TRAINING_DISK_SIZE) { $env:TRAINING_DISK_SIZE } else { "16m" }
 
 Push-Location $RootDir
 try {
@@ -162,6 +164,8 @@ try {
         "-e", "DB_NAME=memberdb",
         "-e", "DB_USER=memberapp",
         "-e", "DB_PASSWORD=memberapp",
+        "-e", "AUDIT_LOG_PATH=/training-disk/audit/member-audit.log",
+        "--tmpfs", "/training-disk:rw,size=$TrainingDiskSize,mode=1777",
         "agent-education-tomcat"
     ) | Out-Null
 
@@ -215,8 +219,9 @@ try {
     Write-Host "Agent log / LangGraph State updates:"
     Write-Host "  docker logs -f agent-education-agent"
     Write-Host ""
-    Write-Host "Inject the incident with:"
+    Write-Host "Inject an incident with:"
     Write-Host "  .\scripts\inject_db_connection_exhaustion.ps1"
+    Write-Host "  .\scripts\inject_disk_full.ps1"
 }
 finally {
     Pop-Location
