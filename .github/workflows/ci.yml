@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["instructor-ready", "student-complete", "training/team-agent-battle"]
+    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution"]
   pull_request:
 
 jobs:
