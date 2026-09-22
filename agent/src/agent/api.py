@@ -92,5 +92,5 @@ async def trigger() -> dict:
     """
     if runtime.active_incident_id:
         raise HTTPException(status_code=409, detail="incident already active")
-    await runtime.open_incident("Manual training trigger: investigate current application condition.")
+    await runtime.open_incident("研修用の手動開始です。現在のアプリケーションの状態を調査してください。")
     return runtime.snapshot()

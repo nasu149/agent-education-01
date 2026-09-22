@@ -19,6 +19,15 @@ const labels = {
   done: "END",
 };
 
+const actionLabels = {
+  start_container: "コンテナの起動",
+  restart_container: "コンテナの再起動",
+  terminate_postgres_connections: "PostgreSQL 接続の切断",
+  manual: "手動対応",
+  none: "操作不要",
+};
+const confidenceLabels = { low: "低", medium: "中", high: "高" };
+
 function esc(value) {
   return String(value ?? "").replace(
     /[&<>"']/g,
@@ -66,11 +75,11 @@ function renderState(st) {
  </div>`;
   html += `<div class="section-title">incident</div><div class="diagnosis">${esc(st.incident || "-")}</div>`;
   if (diagnosis) {
-    html += `<div class="section-title">diagnosis</div><div class="diagnosis">
-     <b>root_cause:</b> ${esc(diagnosis.root_cause)}<br>
-     <b>recommended_action:</b> ${esc(diagnosis.recommended_action)} → ${esc(diagnosis.target_service)}${diagnosis.target_application && diagnosis.target_application !== "none" ? ` / ${esc(diagnosis.target_application)}` : ""}<br>
-     <b>confidence:</b> ${esc(diagnosis.confidence)}<br>
-     <b>evidence:</b><ul>${(diagnosis.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+    html += `<div class="section-title">診断結果</div><div class="diagnosis">
+     <b>推定原因:</b> ${esc(diagnosis.root_cause)}<br>
+     <b>提案する操作:</b> ${esc(actionLabels[diagnosis.recommended_action] ?? diagnosis.recommended_action)} → ${esc(diagnosis.target_service === "none" ? "対象なし" : diagnosis.target_service)}${diagnosis.target_application && diagnosis.target_application !== "none" ? ` / ${esc(diagnosis.target_application)}` : ""}<br>
+     <b>確信度:</b> ${esc(confidenceLabels[diagnosis.confidence] ?? diagnosis.confidence)}<br>
+     <b>根拠:</b><ul>${(diagnosis.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
    </div>`;
   }
   if (verification) {

@@ -24,10 +24,10 @@ class Diagnosis(BaseModel):
     このモデルは形式を検証するもので、原因の正しさや実行の承認を保証するものではない。
     """
 
-    root_cause: str = Field(description="Most likely root cause, stated concretely.")
+    root_cause: str = Field(description="最も可能性が高い根本原因を日本語で具体的に記述する。")
     evidence: list[str] = Field(
         min_length=1,
-        description="Observed facts that support the root-cause judgment.",
+        description="根本原因の判断を裏付ける、観測された事実を各項目に日本語で記述する。",
     )
     recommended_action: Literal[
         "start_container",
@@ -35,16 +35,16 @@ class Diagnosis(BaseModel):
         "terminate_postgres_connections",
         "manual",
         "none",
-    ] = Field(description="Smallest safe remediation available to this Agent.")
+    ] = Field(description="この Agent が実行できる、安全かつ最小限の復旧操作。")
     target_service: Literal["httpd", "tomcat", "postgres", "none"]
     target_application: str = Field(
         default="none",
         description=(
-            "PostgreSQL application_name to terminate when recommended_action is "
-            "terminate_postgres_connections; otherwise use 'none'."
+            "recommended_action が terminate_postgres_connections の場合は、"
+            "切断対象の PostgreSQL の application_name を指定する。それ以外は 'none' にする。"
         ),
     )
-    action_reason: str = Field(description="Why this action is appropriate and safe enough to propose.")
+    action_reason: str = Field(description="この操作が適切で、提案できる程度に安全だと判断した理由を日本語で記述する。")
     confidence: Literal["low", "medium", "high"]
 
 

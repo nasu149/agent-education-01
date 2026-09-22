@@ -9,3 +9,5 @@ logs/*.log
 .vscode/
 .DS_Store
 target/
+# ローカルの復元用コピー（解答コードを含むため配布しない）
+docs/prompt-ja-backup/
