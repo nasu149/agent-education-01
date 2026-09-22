@@ -20,8 +20,16 @@ Web API が利用不能になるケースを扱います。
 
 AI Agent 研修の開始前に講師が Tomcat だけをこっそり作り直します。
 
+Linux / Oracle Linux:
+
 ~~~bash
 ./scripts/prepare_disk_full_training.sh
+~~~
+
+Windows PowerShell:
+
+~~~powershell
+.\scripts\prepare_disk_full_training.ps1
 ~~~
 
 このスクリプトは、
@@ -77,14 +85,26 @@ GET /api/members = HTTP 500
 
 障害注入:
 
+Linux / Oracle Linux:
+
 ~~~bash
 ./scripts/battle_inject_fault.sh disk-full
+~~~
+
+Windows PowerShell:
+
+~~~powershell
+.\scripts\battle_inject_fault.ps1 disk-full
 ~~~
 
 直接実行する場合:
 
 ~~~bash
 ./scripts/inject_disk_full.sh
+~~~
+
+~~~powershell
+.\scripts\inject_disk_full.ps1
 ~~~
 
 障害注入スクリプトが作る大容量ファイルは、
@@ -238,6 +258,10 @@ GET /api/members = HTTP 200
 
 ~~~bash
 ./scripts/battle_reset.sh
+~~~
+
+~~~powershell
+.\scripts\battle_reset.ps1
 ~~~
 
 でも `training-*.log` を削除するため、次チームへ障害を持ち越しません。
