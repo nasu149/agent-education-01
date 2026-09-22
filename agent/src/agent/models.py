@@ -33,6 +33,8 @@ class Diagnosis(BaseModel):
         "start_container",
         "restart_container",
         "terminate_postgres_connections",
+        # ===== 模範解答（TODO D5）=====
+        "cleanup_training_logs",
         # TODO D5: disk-full 用の復旧 action を追加する
         "manual",
         "none",
