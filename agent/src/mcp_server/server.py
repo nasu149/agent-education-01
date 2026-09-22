@@ -53,7 +53,7 @@ DB_ADMIN_PASSWORD = os.getenv("DB_ADMIN_PASSWORD", "postgres")
 FAULT_DB_USER = os.getenv("FAULT_DB_USER", "fault_injector")
 TERMINABLE_DB_APPLICATIONS = {
     item.strip()
-    for item in os.getenv("TERMINABLE_DB_APPLICATIONS", "fault-injector").split(",")
+    for item in os.getenv("TERMINABLE_DB_APPLICATIONS", "fault-injector,fault-locker").split(",")
     if item.strip()
 }
 
@@ -307,6 +307,55 @@ def get_postgres_connection_summary() -> dict[str, Any]:
         "ordinary_connection_capacity": ordinary_capacity,
         "observed_connections_excluding_this_mcp_session": observed_connections,
         "activity": activity,
+    }
+
+
+@mcp.tool()
+def get_postgres_lock_summary() -> dict[str, Any]:
+    """固定の読み取り専用 SQL で PostgreSQL の blocker / blocked 関係を調べる。
+
+    HTTP がタイムアウトするのに PostgreSQL 自体は稼働中、といった場合に
+    lock wait が原因か確認するための観測 Tool。pg_blocking_pids() と
+    pg_stat_activity を使い、待たされている session と blocker の
+    application_name、user、state、wait_event、直近 query を返す。
+
+    SQL は実装内に固定されており、LLM から任意 SQL は指定できない。
+    """
+    LOGGER.info("get_postgres_lock_summary")
+    with _postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    blocked.pid AS blocked_pid,
+                    COALESCE(blocked.usename, '') AS blocked_user,
+                    COALESCE(blocked.application_name, '') AS blocked_application_name,
+                    COALESCE(blocked.state, '') AS blocked_state,
+                    COALESCE(blocked.wait_event_type, '') AS blocked_wait_event_type,
+                    COALESCE(blocked.wait_event, '') AS blocked_wait_event,
+                    COALESCE(blocked.query, '') AS blocked_query,
+                    blocker.pid AS blocker_pid,
+                    COALESCE(blocker.usename, '') AS blocker_user,
+                    COALESCE(blocker.application_name, '') AS blocker_application_name,
+                    COALESCE(blocker.state, '') AS blocker_state,
+                    COALESCE(blocker.wait_event_type, '') AS blocker_wait_event_type,
+                    COALESCE(blocker.wait_event, '') AS blocker_wait_event,
+                    COALESCE(blocker.query, '') AS blocker_query
+                FROM pg_stat_activity AS blocked
+                CROSS JOIN LATERAL unnest(pg_blocking_pids(blocked.pid))
+                    AS blocking_pid(pid)
+                JOIN pg_stat_activity AS blocker
+                    ON blocker.pid = blocking_pid.pid
+                WHERE blocked.datname = current_database()
+                ORDER BY blocked.pid, blocker.pid
+                """
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+
+    return {
+        "blocked_session_count": len({row["blocked_pid"] for row in rows}),
+        "blocking_session_count": len({row["blocker_pid"] for row in rows}),
+        "blocking_pairs": rows,
     }
 
 
