@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet("tomcat-stop","postgres-stop","proxy-port","db-password")]
+    [ValidateSet("tomcat-stop","postgres-stop","proxy-port","db-password","db-connections","db-lock")]
     [string]$Fault
 )
 
@@ -17,7 +17,13 @@ switch ($Fault) {
         docker compose exec -T httpd sh -c "sed -i 's/tomcat:8080/tomcat:18080/g' /usr/local/apache2/conf/extra/member-app.conf && httpd -k graceful"
     }
     "db-password" {
-        docker compose exec -T postgres psql -U memberapp -d memberdb -c "ALTER USER memberapp WITH PASSWORD 'broken-training-password';"
+        docker compose exec -T postgres psql -U postgres -d memberdb -c "ALTER USER memberapp WITH PASSWORD 'broken-training-password';"
+    }
+    "db-connections" {
+        docker compose --profile fault up -d --build fault-injector
+    }
+    "db-lock" {
+        docker compose --profile fault up -d --build lock-injector
     }
 }
 
