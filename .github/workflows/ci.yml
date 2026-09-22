@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution"]
+    branches: ["instructor-ready", "student-complete", "training/team-agent-battle", "training/team-agent-battle-solution", "experiment/db-lock"]
   pull_request:
 
 jobs:
@@ -215,6 +215,130 @@ jobs:
           recovered=0
           for _ in $(seq 1 40); do
             if curl -fsS http://localhost:8088/api/members >/dev/null 2>&1; then
+              recovered=1
+              break
+            fi
+            sleep 1
+          done
+          test "$recovered" -eq 1
+
+
+  db-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - name: Start normal application stack
+        run: docker compose up -d --build postgres tomcat httpd
+      - name: Verify db-lock incident and real MCP remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            code=$?
+            trap - EXIT
+            if [ "$code" -ne 0 ]; then
+              echo "===== compose ps ====="
+              docker compose --profile fault ps || true
+              echo "===== lock injector logs ====="
+              docker compose --profile fault logs --no-color lock-injector || true
+              echo "===== postgres activity ====="
+              docker compose exec -T postgres psql -U postgres -d memberdb -c                 "select pid,usename,application_name,state,wait_event_type,wait_event,query from pg_stat_activity order by pid;" || true
+              echo "===== tomcat logs ====="
+              docker compose logs --no-color tomcat || true
+            fi
+            docker compose --profile fault down -v --remove-orphans || true
+            exit "$code"
+          }
+          trap cleanup EXIT
+
+          echo "Waiting for healthy application..."
+          healthy=0
+          for _ in $(seq 1 40); do
+            if curl -fsS --max-time 2 http://localhost:8088/api/members >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          test "$healthy" -eq 1
+
+          echo "Starting ACCESS EXCLUSIVE lock holder..."
+          docker compose --profile fault up -d --build lock-injector
+
+          active=0
+          for _ in $(seq 1 30); do
+            if docker compose --profile fault logs --no-color lock-injector 2>&1 | grep -q "Fault active:"; then
+              active=1
+              break
+            fi
+            sleep 1
+          done
+          test "$active" -eq 1
+
+          echo "The application should now block even though all service containers are running..."
+          if curl -fsS --max-time 2 http://localhost:8088/api/members >/dev/null 2>&1; then
+            echo "Expected /api/members to block under db-lock, but it succeeded." >&2
+            exit 1
+          fi
+
+          for service in postgres tomcat httpd; do
+            test "$(docker compose ps --status running --services | grep -cx "$service")" -eq 1
+          done
+
+          echo "Building Agent image and querying the real lock-observation MCP tool..."
+          docker compose build agent
+          observation=$(
+            docker compose run --rm --no-deps -T agent python - <<'PY'
+          import asyncio
+          import json
+
+          from agent.mcp_tools import load_tool_catalog
+
+
+          async def main():
+              catalog = await load_tool_catalog()
+              tool = next(
+                  item for item in catalog.read_only
+                  if item.name == "get_postgres_lock_summary"
+              )
+              summary = await tool.ainvoke({})
+              print(json.dumps(summary, ensure_ascii=False, default=str))
+
+
+          asyncio.run(main())
+          PY
+          )
+          echo "$observation"
+          echo "$observation" | grep -q "fault-locker"
+
+          echo "Applying the same approved mutation the Graph would execute..."
+          docker compose run --rm --no-deps -T agent python - <<'PY'
+          import asyncio
+
+          from agent.mcp_tools import load_tool_catalog
+
+
+          async def main():
+              catalog = await load_tool_catalog()
+              result = await catalog.mutating["terminate_postgres_connections"].ainvoke(
+                  {"application_name": "fault-locker"}
+              )
+              print("MCP remediation result:", result)
+
+
+          asyncio.run(main())
+          PY
+
+          remaining=$(docker compose exec -T postgres             psql -U postgres -d memberdb -Atc             "select count(*) from pg_stat_activity where usename='fault_injector' and application_name='fault-locker';")
+          echo "fault-locker sessions after remediation: $remaining"
+          test "$remaining" -eq 0
+
+          echo "Application should recover after PostgreSQL rolls back the terminated transaction..."
+          recovered=0
+          for _ in $(seq 1 40); do
+            if curl -fsS --max-time 3 http://localhost:8088/api/members >/dev/null 2>&1; then
               recovered=1
               break
             fi
