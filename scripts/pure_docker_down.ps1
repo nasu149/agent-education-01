@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $Network = "agent-education-net"
 $Volume = "agent-education-postgres-data"
 $Containers = @(
+    "agent-education-lock-injector",
     "agent-education-fault-injector",
     "agent-education-agent",
     "agent-education-httpd",
