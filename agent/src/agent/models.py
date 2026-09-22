@@ -33,6 +33,7 @@ class Diagnosis(BaseModel):
         "start_container",
         "restart_container",
         "terminate_postgres_connections",
+        # TODO D5: disk-full 用の復旧 action を追加する
         "manual",
         "none",
     ] = Field(description="この Agent が実行できる、安全かつ最小限の復旧操作。")
