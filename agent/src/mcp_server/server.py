@@ -57,6 +57,13 @@ TERMINABLE_DB_APPLICATIONS = {
     if item.strip()
 }
 
+TRAINING_DB_DISK_SERVICE = "postgres"
+TRAINING_DB_DISK_PATH = os.getenv("TRAINING_DB_DISK_PATH", "/training-disk")
+TRAINING_DB_EXPORT_PATH = os.getenv(
+    "TRAINING_DB_EXPORT_PATH",
+    f"{TRAINING_DB_DISK_PATH}/archive/training-overnight-export.bin",
+)
+
 
 def _client():
     """マウントされたローカルの Docker ソケットに接続する SDK クライアントを作成する。"""
@@ -308,6 +315,101 @@ def get_postgres_connection_summary() -> dict[str, Any]:
         "observed_connections_excluding_this_mcp_session": observed_connections,
         "activity": activity,
     }
+
+
+def _require_training_db_disk_service(service: str):
+    if service != TRAINING_DB_DISK_SERVICE:
+        raise ValueError(
+            f"training DB disk tools only permit service={TRAINING_DB_DISK_SERVICE!r}"
+        )
+    return _container_for_service(service)
+
+
+def _training_db_disk_usage(service: str) -> dict[str, Any]:
+    container = _require_training_db_disk_service(service)
+    exit_code, output = container.exec_run(["df", "-Pk", TRAINING_DB_DISK_PATH])
+    text = output.decode("utf-8", errors="replace")
+    if exit_code != 0:
+        return {
+            "service": service,
+            "path": TRAINING_DB_DISK_PATH,
+            "error": text.strip(),
+        }
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return {
+            "service": service,
+            "path": TRAINING_DB_DISK_PATH,
+            "error": f"unexpected df output: {text!r}",
+        }
+
+    fields = lines[-1].split()
+    if len(fields) < 6:
+        return {
+            "service": service,
+            "path": TRAINING_DB_DISK_PATH,
+            "error": f"unexpected df fields: {lines[-1]!r}",
+        }
+
+    return {
+        "service": service,
+        "path": TRAINING_DB_DISK_PATH,
+        "filesystem": fields[0],
+        "size_kb": int(fields[1]),
+        "used_kb": int(fields[2]),
+        "available_kb": int(fields[3]),
+        "use_percent": int(fields[4].rstrip("%")),
+        "mount_point": fields[5],
+    }
+
+
+@mcp.tool()
+def get_postgres_training_disk_usage(service: str = "postgres") -> dict[str, Any]:
+    """PostgreSQL の研修用ストレージ /training-disk の容量を確認する。
+
+    TODO E1:
+    _training_db_disk_usage(service) を利用して、構造化された使用率を返してください。
+    任意 path は受け取らず、対象は postgres 固定です。
+    """
+    raise NotImplementedError("TODO E1: get_postgres_training_disk_usage を実装してください")
+
+
+@mcp.tool()
+def list_postgres_training_disk_files(
+    service: str = "postgres",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """PostgreSQL の /training-disk 配下で容量を使うファイルを確認する。
+
+    TODO E2:
+    /training-disk 配下だけを対象に、大きなファイルをサイズ降順で返してください。
+
+    条件:
+    - service は postgres 固定
+    - limit は 1〜20 に丸める
+    - LLM から任意 path / shell command を受け取らない
+    - path と size_kb を返す
+    """
+    raise NotImplementedError("TODO E2: list_postgres_training_disk_files を実装してください")
+
+
+@mcp.tool()
+def cleanup_postgres_training_exports(
+    service: str = "postgres",
+) -> dict[str, Any]:
+    """人間の承認後、研修用の異常な overnight export だけを削除する。
+
+    TODO E3:
+    DB disk-full 復旧用 mutation Tool を実装してください。
+
+    安全条件:
+    - service は postgres 固定
+    - 削除対象は TRAINING_DB_EXPORT_PATH の完全一致 1 ファイルだけ
+    - pgspace や任意 path を削除しない
+    - cleanup 前後の disk usage と削除結果を返す
+    """
+    raise NotImplementedError("TODO E3: cleanup_postgres_training_exports を実装してください")
 
 
 @mcp.tool()
