@@ -22,3 +22,9 @@ def test_plain_docker_container_fallbacks_are_explicit():
         "tomcat": "agent-education-tomcat",
         "postgres": "agent-education-postgres",
     }
+
+
+def test_training_disk_cleanup_is_narrowly_scoped():
+    assert server.TRAINING_DISK_SERVICE == "tomcat"
+    assert server.TRAINING_DISK_PATH == "/training-disk"
+    assert server.TRAINING_LOG_ARCHIVE_DIR == "/training-disk/archive"
