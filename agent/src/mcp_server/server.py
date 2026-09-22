@@ -374,6 +374,10 @@ def get_disk_usage(service: str = "tomcat") -> dict[str, Any]:
     構造化されたディスク使用率を返してください。
     対象サービスやパスの安全制約は講師側 helper に実装済みです。
     """
+    # ===== 模範解答（TODO D1）=====
+    LOGGER.info("get_disk_usage service=%s path=%s", service, TRAINING_DISK_PATH)
+    return _training_disk_usage(service)
+
     raise NotImplementedError("TODO D1: get_disk_usage を実装してください")
 
 @mcp.tool()
@@ -389,6 +393,45 @@ def list_large_files(service: str = "tomcat", limit: int = 10) -> dict[str, Any]
     - LLM から任意 path を受け取らない
     - 戻り値には path と size_kb を含める
     """
+    # ===== 模範解答（TODO D2）=====
+    container = _require_training_disk_service(service)
+    safe_limit = max(1, min(int(limit), 20))
+    LOGGER.info(
+        "list_large_files service=%s path=%s limit=%s",
+        service,
+        TRAINING_DISK_PATH,
+        safe_limit,
+    )
+
+    command = (
+        f"find '{TRAINING_DISK_PATH}' -type f -exec du -k {{}} + "
+        f"2>/dev/null | sort -nr | head -n {safe_limit}"
+    )
+    exit_code, output = container.exec_run(["sh", "-c", command])
+    text = output.decode("utf-8", errors="replace")
+
+    files: list[dict[str, Any]] = []
+    if exit_code == 0:
+        for line in text.splitlines():
+            size_text, separator, path = line.partition("\t")
+            if not separator:
+                parts = line.split(maxsplit=1)
+                if len(parts) != 2:
+                    continue
+                size_text, path = parts
+            try:
+                size_kb = int(size_text)
+            except ValueError:
+                continue
+            files.append({"path": path, "size_kb": size_kb})
+
+    return {
+        "service": service,
+        "path": TRAINING_DISK_PATH,
+        "files": files,
+        "command_exit_code": exit_code,
+    }
+
     raise NotImplementedError("TODO D2: list_large_files を実装してください")
 
 @mcp.tool()
@@ -405,6 +448,50 @@ def cleanup_training_logs(service: str = "tomcat") -> dict[str, Any]:
     - 任意 path / 任意 shell を外部引数として受け取らない
     - cleanup 前後のディスク使用率と、削除成功/失敗一覧を返す
     """
+    # ===== 模範解答（TODO D3）=====
+    container = _require_training_disk_service(service)
+    before = _training_disk_usage(service)
+    LOGGER.warning(
+        "MUTATION cleanup_training_logs service=%s archive=%s",
+        service,
+        TRAINING_LOG_ARCHIVE_DIR,
+    )
+
+    find_command = (
+        f"find '{TRAINING_LOG_ARCHIVE_DIR}' -maxdepth 1 -type f "
+        "-name 'training-*.log' -print 2>/dev/null"
+    )
+    _, output = container.exec_run(["sh", "-c", find_command])
+    candidates = [
+        line.strip()
+        for line in output.decode("utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+
+    deleted: list[str] = []
+    failed: list[str] = []
+    allowed_prefix = TRAINING_LOG_ARCHIVE_DIR.rstrip("/") + "/training-"
+
+    for path in candidates:
+        if not path.startswith(allowed_prefix) or not path.endswith(".log"):
+            failed.append(path)
+            continue
+        exit_code, _ = container.exec_run(["rm", "-f", path])
+        if exit_code == 0:
+            deleted.append(path)
+        else:
+            failed.append(path)
+
+    after = _training_disk_usage(service)
+    return {
+        "action": "cleanup_training_logs",
+        "service": service,
+        "deleted_files": deleted,
+        "failed_files": failed,
+        "before": before,
+        "after": after,
+    }
+
     raise NotImplementedError("TODO D3: cleanup_training_logs を実装してください")
 
 @mcp.tool()
