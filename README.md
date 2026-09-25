@@ -55,6 +55,13 @@ mutation Tool は LLM に直接 bind せず、Human Approval 後にだけ実行�
 
 詳細: [docs/DISK_FULL.md](docs/DISK_FULL.md)
 
+## 関連ドキュメント
+
+- [MCP Tool Reference](docs/MCP_TOOLS.md) - 全 MCP Tool の一覧、引数、戻り値、安全制約、LangGraph からの呼び出し方
+- [Architecture](docs/ARCHITECTURE.md) - LangGraph / MCP / Human Approval の全体構成
+- [Disk Full](docs/DISK_FULL.md) - Disk Full 課題のシナリオと要件
+- [Disk Full 模範解答](docs/DISK_FULL_SOLUTION.md) - TODO D1〜D5 の解答方針
+
 ## 講師側の準備
 
 Linux / Oracle Linux:
