@@ -158,6 +158,28 @@ class IncidentNodes:
             method="json_schema",
         )
 
+        # mutation Tool は judge に bind しない。
+        # ただし、MCP から取得した実際の Tool 定義は復旧方針の判断材料として使う。
+        mutation_tool_reference = "\n\n".join(
+            (
+                f"Tool名: {tool.name}\n"
+                f"説明:\n{tool.description}\n"
+                "入力JSON Schema:\n"
+                f"{json.dumps(tool.get_input_schema().model_json_schema(), ensure_ascii=False, indent=2)}"
+            )
+            for tool in sorted(
+                catalog.mutating.values(),
+                key=lambda item: item.name,
+            )
+        )
+        self.judge_system_prompt = (
+            JUDGE_SYSTEM_PROMPT
+            + "\n\n以下は MCP Server から取得した、利用可能な状態変更 Tool の定義です。"
+            + "\nここでは Tool を実行せず、観測結果と照らし合わせて "
+            + "recommended_action と引数に対応する対象を判断してください。\n\n"
+            + mutation_tool_reference
+        )
+
         # ToolNode 自体は講師側で生成済み。
         self.raw_tool_node = ToolNode(catalog.read_only)
         self.read_tools = {tool.name: tool for tool in catalog.read_only}
@@ -270,7 +292,7 @@ class IncidentNodes:
 
         やること:
         1. self.emit_state("judge", state) で現在Stateを画面に出す
-        2. JUDGE_SYSTEM_PROMPT と state["messages"] をまとめる
+        2. 起動時に構築した judge 用 System Prompt と state["messages"] をまとめる
         3. self.diagnosis_llm.ainvoke(...) を呼ぶ
         4. {"diagnosis": diagnosis, "investigation_tool_results": 0} を返す
 
@@ -282,7 +304,7 @@ class IncidentNodes:
         self.emit_state("judge", state)
 
         prompt = [
-            SystemMessage(content=JUDGE_SYSTEM_PROMPT),
+            SystemMessage(content=self.judge_system_prompt),
             *state["messages"],
             HumanMessage(content="これまでの結果から、構造化された Diagnosis を作成してください。"),
         ]
