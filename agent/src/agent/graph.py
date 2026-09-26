@@ -17,11 +17,13 @@ from agent.nodes import (
     IncidentNodes,
     IncidentState,
     route_after_investigate,
+    route_after_remediation_plan,
     status_code,
 )
 
 # 既存テストや教材から参照している名前を維持する。
 _route_after_investigate = route_after_investigate
+_route_after_remediation_plan = route_after_remediation_plan
 _status_code = status_code
 
 
@@ -102,19 +104,20 @@ def build_graph(
     # - report の内容
     #
     # 変更禁止:
-    # - catalog.mutating を LLM へ bind する
-    # - approval を迂回して mutation Tool を呼ぶ
+    # - approval を迂回して mutation Tool を実行する
+    # - 1回の承認で複数 mutation Tool をまとめて実行する
     # - MCP Server / fault injector を競技用に改造する
     # - 障害の答えを hard-code する
     #
-    # ===== 模範解答（TODO 5）=====
+    # ===== 派生案: mutation Tool Call の直前で HITL =====
     builder = StateGraph(IncidentState)
 
     builder.add_node("investigate", nodes.investigate)
     builder.add_node("tools", nodes.tools)
     builder.add_node("judge", nodes.judge)
+    builder.add_node("plan_remediation", nodes.plan_remediation)
     builder.add_node("approval", nodes.approval)
-    builder.add_node("remediate", nodes.remediate)
+    builder.add_node("mutation_tools", nodes.mutation_tools)
     builder.add_node("verify", nodes.verify)
     builder.add_node("report", nodes.report)
 
@@ -122,36 +125,25 @@ def build_graph(
     builder.add_conditional_edges(
         "investigate",
         _route_after_investigate,
-        {
-            "tools": "tools",
-            "judge": "judge",
-        },
+        {"tools": "tools", "judge": "judge"},
     )
     builder.add_edge("tools", "investigate")
+    builder.add_edge("judge", "plan_remediation")
     builder.add_conditional_edges(
-        "judge",
-        nodes.after_judge,
-        {
-            "approval": "approval",
-            "report": "report",
-        },
+        "plan_remediation",
+        _route_after_remediation_plan,
+        {"approval": "approval", "report": "report"},
     )
     builder.add_conditional_edges(
         "approval",
         nodes.after_approval,
-        {
-            "remediate": "remediate",
-            "report": "report",
-        },
+        {"mutation_tools": "mutation_tools", "report": "report"},
     )
-    builder.add_edge("remediate", "verify")
+    builder.add_edge("mutation_tools", "verify")
     builder.add_conditional_edges(
         "verify",
         nodes.after_verify,
-        {
-            "investigate": "investigate",
-            "report": "report",
-        },
+        {"investigate": "investigate", "report": "report"},
     )
     builder.add_edge("report", END)
 

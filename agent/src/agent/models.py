@@ -61,6 +61,7 @@ class ApprovalRequest(BaseModel):
     """
 
     action: str
+    tool_args: dict[str, object] = Field(default_factory=dict)
     target_service: str
     target_application: str = "none"
     root_cause: str

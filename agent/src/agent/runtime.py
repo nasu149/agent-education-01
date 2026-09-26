@@ -238,6 +238,9 @@ class AgentRuntime:
                 "verification": None,
                 "verify_attempts": 0,
                 "investigation_tool_results": 0,
+                "remediation_action": None,
+                "remediation_args": None,
+                "remediation_result": None,
                 "report": None,
             }
             self.current_node = "investigate"
@@ -364,6 +367,9 @@ def _state_for_ui(state: dict[str, Any]) -> dict[str, Any]:
         "verification",
         "verify_attempts",
         "investigation_tool_results",
+        "remediation_action",
+        "remediation_args",
+        "remediation_result",
         "report",
     ):
         result[key] = _json_safe(state.get(key))

@@ -2,8 +2,9 @@ const nodes = [
   "investigate",
   "tools",
   "judge",
+  "plan_remediation",
   "approval",
-  "remediate",
+  "mutation_tools",
   "verify",
   "report",
   "done",
@@ -11,9 +12,10 @@ const nodes = [
 const labels = {
   investigate: "investigate\nLLMが次の調査を判断",
   tools: "tools\nToolNodeで観測",
-  judge: "judge\n原因と対処を構造化",
-  approval: "approval\n人間承認",
-  remediate: "remediate\n状態変更",
+  judge: "judge\n原因と方針を構造化",
+  plan_remediation: "plan_remediation\nLLMがmutation Tool Call生成",
+  approval: "approval\nTool実行直前の人間承認",
+  mutation_tools: "mutation_tools\nToolNodeで状態変更",
   verify: "verify\n再観測",
   report: "report\n結果整理",
   done: "END",
@@ -23,6 +25,7 @@ const actionLabels = {
   start_container: "コンテナの起動",
   restart_container: "コンテナの再起動",
   terminate_postgres_connections: "PostgreSQL 接続の切断",
+  cleanup_training_logs: "研修用古いログの削除",
   manual: "手動対応",
   none: "操作不要",
 };
@@ -82,6 +85,12 @@ function renderState(st) {
      <b>根拠:</b><ul>${(diagnosis.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
    </div>`;
   }
+  if (st.remediation_action) {
+    html += `<div class="section-title">mutation Tool Call</div><div class="diagnosis">
+     <b>Tool:</b> ${esc(st.remediation_action)}<br>
+     <b>args:</b> <code>${esc(JSON.stringify(st.remediation_args || {}))}</code>
+   </div>`;
+  }
   if (verification) {
     html += `<div class="section-title">verification</div><div class="diagnosis"><b>success:</b> ${esc(verification.success)}</div>`;
   }
@@ -125,7 +134,9 @@ async function refresh() {
   if (a) {
     document.getElementById("approval").innerHTML =
       `<span class="badge wait">APPROVAL REQUIRED</span>
-   <p><b>${esc(a.action)}</b> → ${esc(a.target_service)}${a.target_application && a.target_application !== "none" ? ` / ${esc(a.target_application)}` : ""}</p><p>${esc(a.root_cause)}</p>
+   <p><b>${esc(a.action)}</b></p>
+   <p><b>Tool args:</b> <code>${esc(JSON.stringify(a.tool_args || {}))}</code></p>
+   <p>${esc(a.root_cause)}</p>
    <ul class="evidence">${a.evidence.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
    <button class="approve" onclick="approve(true)">承認</button><button class="reject" onclick="approve(false)">却下</button>`;
   } else

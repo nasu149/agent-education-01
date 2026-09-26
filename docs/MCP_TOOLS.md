@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-この文書は、`training/disk-full-solution` ブランチで利用する MCP Tool の一覧と役割をまとめたリファレンスです。
+この文書は、`training/disk-full-hitl-tool-call` ブランチで利用する MCP Tool の一覧と役割をまとめたリファレンスです。
 
 実装の正本は次の2ファイルです。
 
@@ -38,10 +38,12 @@ Agent 側の `MultiServerMCPClient` が Python 子プロセスとして起動し
 
 `load_tool_catalog()` は MCP Server から Tool 定義を取得した後、Tool を次の2種類に分けます。
 
-- **read-only Tool**: LLM が調査中に選択可能
-- **mutation Tool**: LLM には公開せず、人間の承認後に Graph 側からのみ実行
+- **read-only Tool**: 調査用 LLM に bind し、ToolNode で自動実行可能
+- **mutation Tool**: 復旧計画用 LLM に bind するが、生成された Tool Call は Human Approval 前には実行しない
 
-この分離は Prompt 上の注意書きではなく、LLM に渡す Tool 自体を制限することで実現しています。
+このブランチでは「Tool を LLM に見せること」と「Tool を実行すること」を分離します。
+mutation Tool の description / input schema は `bind_tools()` で LLM に渡し、
+実行権限は LangGraph の `interrupt()` と ToolNode の配線で制御します。
 
 ## Tool 一覧
 
@@ -420,25 +422,27 @@ LLM から指定できないもの:
 
 # Mutation Tool 詳細
 
-Mutation Tool は **investigator_llm には bind されません**。
-
-Agent が自由に調査している途中で直接実行するのではなく、
+Mutation Tool は **investigator_llm には bind しません**が、復旧計画専用の
+`remediation_llm` には bind します。
 
 ```text
 investigate
     ↓
-judge
+judge / Diagnosis
     ↓
-Diagnosis
+remediation_llm.bind_tools(mutation tools)
     ↓
-Human Approval
+AIMessage.tool_calls   ← まだ実行されていない
     ↓
-remediate
+Human Approval / interrupt()
+    ↓ approve
+ToolNode(mutation tools)
     ↓
-mutation Tool
+MCP Tool 実行
 ```
 
-という経路でのみ実行します。
+`bind_tools()` は実行ではなく Tool Calling 用の定義提供です。
+実際の状態変更は Human Approval 後の ToolNode で初めて発生します。
 
 ## 9. start_container
 
@@ -580,7 +584,7 @@ after
 - 任意 path は受け取りません。
 - 任意 `rm` コマンドを LLM に公開しません。
 - 削除候補を取得した後も prefix / suffix を再検証します。
-- Human Approval 後の `remediate` からだけ呼び出します。
+- Human Approval 後の mutation ToolNode からだけ実行します。
 
 ---
 
@@ -615,15 +619,19 @@ ToolCatalog(
 
 へ分類します。
 
-## 3. LLM へ渡すのは read-only だけ
+## 3. read-only と mutation を別の LLM 用途に bind
 
-`nodes.py` では、
+`nodes.py` では、調査と状態変更の Tool を別々に bind します。
 
 ```python
 self.investigator_llm = self.llm.bind_tools(catalog.read_only)
+
+mutation_tools = list(catalog.mutating.values())
+self.remediation_llm = self.llm.bind_tools(mutation_tools)
 ```
 
-としているため、LLM が Tool Calling で選べるのは read-only Tool だけです。
+`investigator_llm` の Tool Call は read-only ToolNode で自動実行できます。
+一方 `remediation_llm` の Tool Call は Human Approval を通るまで実行しません。
 
 ## 4. ToolNode が実行
 
@@ -647,24 +655,28 @@ ToolMessage(result)
 state["messages"]
 ```
 
-## 5. Mutation は Graph が明示的に実行
+## 5. Mutation Tool Call は実行直前で Human Approval
 
-Mutation Tool は LLM に bind されません。
+復旧計画用 LLM が返した `AIMessage.tool_calls` を、そのまま ToolNode に流しません。
 
-`judge` が `Diagnosis.recommended_action` を決定し、
-Human Approval を通過した後、`remediate` が
-
-```python
-self.catalog.mutating[action].ainvoke(args)
+```text
+AIMessage(tool_calls=[
+  cleanup_training_logs(service="tomcat")
+])
+       ↓
+approval
+       ↓ interrupt()
+人間に Tool 名と引数を表示
+       ↓ approve
+ToolNode(catalog.mutating.values())
+       ↓
+MCP Tool 実行
 ```
 
-として対象 Tool を直接呼び出します。
+却下された場合は ToolNode へ進まないため、状態変更は発生しません。
+承認された場合は、承認画面で確認した同じ Tool Call を ToolNode が実行します。
 
-これにより、
-
-> LLM は調査方法を柔軟に選べるが、システム状態を変更する操作は自由に実行できない
-
-という安全境界を作っています。
+> LLM は本物の MCP Tool schema を見て Tool Call を作れるが、状態変更の実行権限は人間が握る
 
 ---
 

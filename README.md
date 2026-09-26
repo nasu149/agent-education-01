@@ -1,6 +1,6 @@
-> **このブランチ `training/disk-full-solution` は講師用模範解答です。**  
-> `training/disk-full` のTODO・placeholderを残したまま、回答コードだけを追記しています。  
-> GitHubのbranch diffで、新人が追加する実装をほぼそのまま確認できます。
+> **このブランチ `training/disk-full-hitl-tool-call` は HITL Tool Calling の派生実装です。**  
+> `training/disk-full-solution` を土台に mutation MCP Tool を LLM に `bind_tools()` し、  
+> 生成された Tool Call を実行する直前で `interrupt()` して人間承認を挟みます。
 
 # AI Agent研修 - Disk Full 拡張課題
 
@@ -51,7 +51,8 @@ agent/src/agent/nodes.py
   OS / Tomcat / WAR のファイル
 ~~~
 
-mutation Tool は LLM に直接 bind せず、Human Approval 後にだけ実行します。
+mutation Tool は復旧計画用 LLM に `bind_tools()` しますが、`bind_tools()` 自体は実行しません。
+LLM が生成した `AIMessage.tool_calls` は Human Approval で必ず停止し、承認後にだけ ToolNode が実行します。
 
 詳細: [docs/DISK_FULL.md](docs/DISK_FULL.md)
 
@@ -109,9 +110,13 @@ list_large_files
   ↓
 Diagnosis
   ↓
-Human Approval
+plan_remediation
   ↓
-cleanup_training_logs
+LLM Tool Call: cleanup_training_logs(service="tomcat")
+  ↓
+Human Approval / interrupt()
+  ↓
+mutation ToolNode
   ↓
 verify -> HTTP 200
 ~~~

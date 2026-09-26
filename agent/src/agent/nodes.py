@@ -47,6 +47,9 @@ class IncidentState(TypedDict):
     verification: dict | None
     verify_attempts: int
     investigation_tool_results: int
+    remediation_action: str | None
+    remediation_args: dict | None
+    remediation_result: object | None
     report: str | None
 
 
@@ -120,6 +123,24 @@ list_large_files に /training-disk/archive/training-*.log が容量を占有し
 """
 
 
+REMEDIATION_SYSTEM_PROMPT = """\
+あなたは、診断結果を実際に実行可能な復旧 Tool Call に変換する担当です。
+これまでの観測履歴と Diagnosis だけを根拠にしてください。
+
+状態変更が必要で、提供された mutation Tool のどれかで安全に対応できる場合は、
+最小限の Tool を必ず 1 つだけ選び、正しい引数で Tool Call を生成してください。
+Tool の名前・説明・入力 schema は bind_tools で提供された定義を使ってください。
+推測でサービス名や application_name を作らず、観測済みの値だけを使ってください。
+
+Diagnosis が manual または none を推奨している場合、または利用可能な Tool では
+安全に対応できない場合は Tool Call を生成せず、その理由を短く返してください。
+
+ここで生成した Tool Call はまだ実行されません。
+次の approval Node が interrupt() で人間に Tool 名と引数を提示し、
+承認された場合にだけ ToolNode が実行します。
+"""
+
+
 class IncidentNodes:
     """Graph が利用する Node と、その共通依存関係をまとめる。
 
@@ -158,30 +179,14 @@ class IncidentNodes:
             method="json_schema",
         )
 
-        # mutation Tool は judge に bind しない。
-        # ただし、MCP から取得した実際の Tool 定義は復旧方針の判断材料として使う。
-        mutation_tool_reference = "\n\n".join(
-            (
-                f"Tool名: {tool.name}\n"
-                f"説明:\n{tool.description}\n"
-                "入力JSON Schema:\n"
-                f"{json.dumps(tool.get_input_schema().model_json_schema(), ensure_ascii=False, indent=2)}"
-            )
-            for tool in sorted(
-                catalog.mutating.values(),
-                key=lambda item: item.name,
-            )
-        )
-        self.judge_system_prompt = (
-            JUDGE_SYSTEM_PROMPT
-            + "\n\n以下は MCP Server から取得した、利用可能な状態変更 Tool の定義です。"
-            + "\nここでは Tool を実行せず、観測結果と照らし合わせて "
-            + "recommended_action と引数に対応する対象を判断してください。\n\n"
-            + mutation_tool_reference
-        )
+        # mutation Tool は復旧計画専用 LLM に bind する。
+        # bind_tools() は実行せず、Tool の定義を LLM に渡して Tool Call を生成可能にする。
+        mutation_tools = list(catalog.mutating.values())
+        self.remediation_llm = self.llm.bind_tools(mutation_tools)
 
-        # ToolNode 自体は講師側で生成済み。
+        # read-only / mutation の ToolNode を分離する。
         self.raw_tool_node = ToolNode(catalog.read_only)
+        self.raw_mutation_tool_node = ToolNode(mutation_tools)
         self.read_tools = {tool.name: tool for tool in catalog.read_only}
 
     async def starter_placeholder(self, state: IncidentState) -> dict:
@@ -292,7 +297,7 @@ class IncidentNodes:
 
         やること:
         1. self.emit_state("judge", state) で現在Stateを画面に出す
-        2. 起動時に構築した judge 用 System Prompt と state["messages"] をまとめる
+        2. JUDGE_SYSTEM_PROMPT と state["messages"] をまとめる
         3. self.diagnosis_llm.ainvoke(...) を呼ぶ
         4. {"diagnosis": diagnosis, "investigation_tool_results": 0} を返す
 
@@ -304,7 +309,7 @@ class IncidentNodes:
         self.emit_state("judge", state)
 
         prompt = [
-            SystemMessage(content=self.judge_system_prompt),
+            SystemMessage(content=JUDGE_SYSTEM_PROMPT),
             *state["messages"],
             HumanMessage(content="これまでの結果から、構造化された Diagnosis を作成してください。"),
         ]
@@ -324,117 +329,161 @@ class IncidentNodes:
 
         return {
             "diagnosis": diagnosis,
+            "approval": "not_required",
             "investigation_tool_results": 0,
+            "remediation_action": None,
+            "remediation_args": None,
+            "remediation_result": None,
         }
 
         raise NotImplementedError("TODO 3: judge を実装してください")
 
     # ------------------------------------------------------------------
-    # routing helper は講師側で用意
+    # mutation Tool の選択: bind_tools() で本物の Tool Call を作る
     # ------------------------------------------------------------------
-    def after_judge(self, state: IncidentState) -> Literal["approval", "report"]:
-        """状態変更を提案している場合だけ Human Approval へ進む。"""
-        diagnosis = state["diagnosis"]
-        if diagnosis and diagnosis.recommended_action in {
-            "start_container",
-            "restart_container",
-            "terminate_postgres_connections",
-            # ===== 模範解答（TODO D5）=====
-            "cleanup_training_logs",
-            # TODO D5: cleanup_training_logs を Human Approval に進める
-        }:
-            return "approval"
-        return "report"
-
-    # ------------------------------------------------------------------
-    # TODO 4: approval を実装する
-    # ------------------------------------------------------------------
-    def approval(self, state: IncidentState) -> dict:
-        """状態変更の直前で interrupt() し、人間の判断を待つ。
-
-        実装の目安は 10〜20 行程度。
-
-        やること:
-        1. self.emit_state("approval", state) で現在Stateを画面に出す
-        2. state["diagnosis"] を取得
-        3. ApprovalRequest を作成して model_dump()
-        4. approved = interrupt(payload)
-        5. approved / rejected を State に返す
-
-        安全ルール:
-        - interrupt() より前に mutation Tool を実行しない
-        - LLM に mutation Tool を直接渡さない
-        """
-        # ===== 模範解答（TODO 4）=====
-        self.emit_state("approval", state)
+    async def plan_remediation(self, state: IncidentState) -> dict:
+        """Diagnosis と観測履歴から、実行候補となる mutation Tool Call を生成する。"""
+        self.emit_state("plan_remediation", state)
 
         diagnosis = state["diagnosis"]
         if diagnosis is None:
+            raise RuntimeError("plan_remediation node requires diagnosis")
+
+        if diagnosis.recommended_action in {"manual", "none"}:
+            self.emit_event(
+                "INFO",
+                f"No mutation Tool Call required: {diagnosis.recommended_action}",
+            )
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "Diagnosis が "
+                            f"{diagnosis.recommended_action} を推奨しているため、"
+                            "状態変更 Tool は呼び出しません。"
+                        )
+                    )
+                ]
+            }
+
+        prompt = [
+            SystemMessage(content=REMEDIATION_SYSTEM_PROMPT),
+            *state["messages"],
+            HumanMessage(
+                content=(
+                    "構造化された Diagnosis は次のとおりです。\n"
+                    + json.dumps(
+                        diagnosis.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\nこの Diagnosis と観測結果に基づき、必要なら mutation Tool を 1 つ選んでください。"
+                )
+            ),
+        ]
+
+        response = await self.remediation_llm.ainvoke(prompt)
+
+        if isinstance(response, AIMessage) and len(response.tool_calls) > 1:
+            names = ", ".join(call["name"] for call in response.tool_calls)
+            self.emit_event(
+                "WARN",
+                f"LLM proposed multiple mutation tools ({names}); refusing automatic execution",
+            )
+            response = AIMessage(
+                content=(
+                    "複数の状態変更 Tool が同時に提案されたため、安全のため自動実行を中止します。"
+                    "人間が手動で確認してください。"
+                )
+            )
+        elif isinstance(response, AIMessage) and response.tool_calls:
+            call = response.tool_calls[0]
+            self.emit_event(
+                "INFO",
+                f"LLM proposed mutation Tool Call: {call['name']}({call['args']})",
+            )
+        else:
+            self.emit_event("INFO", "LLM proposed no mutation Tool Call")
+
+        return {"messages": [response]}
+
+    # ------------------------------------------------------------------
+    # Tool Call がある場合だけ Human Approval へ進む
+    # ------------------------------------------------------------------
+    def approval(self, state: IncidentState) -> dict:
+        """実際の mutation Tool Call を実行する直前で interrupt() する。"""
+        self.emit_state("approval", state)
+
+        diagnosis = state["diagnosis"]
+        latest = state["messages"][-1]
+        if diagnosis is None:
             raise RuntimeError("approval node requires diagnosis")
+        if not isinstance(latest, AIMessage) or len(latest.tool_calls) != 1:
+            raise RuntimeError("approval node requires exactly one mutation Tool Call")
+
+        tool_call = latest.tool_calls[0]
+        args = dict(tool_call["args"])
+        action = tool_call["name"]
 
         payload = ApprovalRequest(
-            action=diagnosis.recommended_action,
-            target_service=diagnosis.target_service,
-            target_application=diagnosis.target_application,
+            action=action,
+            tool_args=args,
+            target_service=str(args.get("service", "none")),
+            target_application=str(args.get("application_name", "none")),
             root_cause=diagnosis.root_cause,
             evidence=diagnosis.evidence,
-            reason=diagnosis.action_reason,
+            reason=(
+                diagnosis.action_reason
+                + f" / LLM が実行候補として {action} を Tool Call しました。"
+            ),
         ).model_dump()
 
         approved = interrupt(payload)
 
         return {
             "approval": "approved" if bool(approved) else "rejected",
+            "remediation_action": action,
+            "remediation_args": args,
         }
-
-        raise NotImplementedError("TODO 4: approval を実装してください")
 
     def after_approval(
         self,
         state: IncidentState,
-    ) -> Literal["remediate", "report"]:
-        return "remediate" if state["approval"] == "approved" else "report"
+    ) -> Literal["mutation_tools", "report"]:
+        return "mutation_tools" if state["approval"] == "approved" else "report"
 
     # ------------------------------------------------------------------
-    # remediate は講師側で完成済み
+    # Human Approval 後にだけ mutation ToolNode を実行する
     # ------------------------------------------------------------------
-    async def remediate(self, state: IncidentState) -> dict:
-        """Human が承認した Diagnosis に対応する mutation Tool だけを実行する。"""
-        self.emit_state("remediate", state)
-        diagnosis = state["diagnosis"]
-        if diagnosis is None:
-            raise RuntimeError("remediate node requires diagnosis")
+    async def mutation_tools(self, state: IncidentState) -> dict:
+        """承認済みの AIMessage.tool_calls を ToolNode でそのまま実行する。"""
+        self.emit_state("mutation_tools", state)
 
-        action = diagnosis.recommended_action
-        if action not in self.catalog.mutating:
-            raise RuntimeError(f"unsupported remediation: {action}")
+        latest = state["messages"][-1]
+        if not isinstance(latest, AIMessage) or len(latest.tool_calls) != 1:
+            raise RuntimeError("mutation_tools node requires exactly one approved Tool Call")
 
-        if action == "terminate_postgres_connections":
-            if not diagnosis.target_application or diagnosis.target_application == "none":
-                raise RuntimeError(
-                    "PostgreSQL connection termination requires target_application"
-                )
-            args = {"application_name": diagnosis.target_application}
-            target_text = f"postgres application={diagnosis.target_application}"
-        else:
-            if diagnosis.target_service == "none":
-                raise RuntimeError("container remediation requires a target service")
-            args = {"service": diagnosis.target_service}
-            target_text = diagnosis.target_service
+        tool_call = latest.tool_calls[0]
+        action = tool_call["name"]
+        args = dict(tool_call["args"])
 
-        self.emit_event("WARN", f"Executing approved action: {action}({target_text})")
-        result = await self.catalog.mutating[action].ainvoke(args)
-        self.emit_event("INFO", f"Remediation result: {str(result)[:450]}")
+        self.emit_event("WARN", f"Executing approved Tool Call: {action}({args})")
+        result = await self.raw_mutation_tool_node.ainvoke(state)
+        tool_messages = [
+            message
+            for message in result.get("messages", [])
+            if isinstance(message, ToolMessage)
+        ]
+
+        for message in tool_messages:
+            preview = str(message.content).replace("\n", " ")[:450]
+            self.emit_event("INFO", f"Mutation result from {message.name}: {preview}")
 
         return {
-            "messages": [
-                HumanMessage(
-                    content=(
-                        "人間が承認した復旧操作を実行しました: "
-                        f"{action}({target_text})。ツールの実行結果: {result}"
-                    )
-                )
-            ]
+            **result,
+            "remediation_action": action,
+            "remediation_args": args,
+            "remediation_result": [message.content for message in tool_messages],
         }
 
     # ------------------------------------------------------------------
@@ -509,26 +558,37 @@ class IncidentNodes:
             evidence = "\n".join(f"- {item}" for item in diagnosis.evidence)
             verification = state["verification"]
 
+            action = state.get("remediation_action")
+            args = state.get("remediation_args") or {}
+
             if state["approval"] == "rejected":
-                outcome = "復旧操作は人間に却下されたため実行していません。"
+                outcome = "LLM が生成した Tool Call は人間に却下されたため実行していません。"
             elif verification and verification.get("success"):
-                outcome = "承認された復旧操作を実行し、HTTP 200で復旧を確認しました。"
-            elif diagnosis.recommended_action == "manual":
+                outcome = "承認された Tool Call を実行し、HTTP 200で復旧を確認しました。"
+            elif action is None and diagnosis.recommended_action == "manual":
                 outcome = (
-                    "Agentの許可された操作範囲では復旧できないため、"
+                    "利用可能な mutation Tool では安全に復旧できないため、"
                     "人間へエスカレーションします。"
                 )
-            elif diagnosis.recommended_action == "none":
+            elif action is None and diagnosis.recommended_action == "none":
                 outcome = "状態変更は不要と判断しました。"
+            elif action is None:
+                outcome = (
+                    "実行可能な mutation Tool Call が生成されなかったため、"
+                    "人間へエスカレーションします。"
+                )
             else:
                 outcome = (
-                    "自動復旧後も正常性を確認できませんでした。"
+                    "Tool Call 実行後も正常性を確認できませんでした。"
                     "人間へエスカレーションします。"
                 )
 
-            target = diagnosis.target_service
-            if diagnosis.target_application != "none":
-                target += f" / application={diagnosis.target_application}"
+            reported_action = action or diagnosis.recommended_action
+            target = (
+                json.dumps(args, ensure_ascii=False)
+                if args
+                else diagnosis.target_service
+            )
 
             text = (
                 "【一次障害対応レポート】\n"
@@ -536,7 +596,8 @@ class IncidentNodes:
                 f"推定原因: {diagnosis.root_cause}\n"
                 f"確信度: {diagnosis.confidence}\n"
                 f"根拠:\n{evidence}\n"
-                f"提案/実施: {diagnosis.recommended_action} -> {target}\n"
+                f"診断上の推奨: {diagnosis.recommended_action}\n"
+                f"Tool Call/実施: {reported_action} -> {target}\n"
                 f"結果: {outcome}"
             )
 
@@ -552,6 +613,16 @@ def route_after_investigate(
     if isinstance(latest, AIMessage) and latest.tool_calls:
         return "tools"
     return "judge"
+
+
+def route_after_remediation_plan(
+    state: IncidentState,
+) -> Literal["approval", "report"]:
+    """mutation Tool Call が 1 件あれば approval、なければ report。"""
+    latest = state["messages"][-1]
+    if isinstance(latest, AIMessage) and len(latest.tool_calls) == 1:
+        return "approval"
+    return "report"
 
 
 def status_code(tool_result) -> int | None:
